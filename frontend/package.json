@@ -1,0 +1,8 @@
+{
+  "name": "frontend",
+  "private": true,
+  "dependencies": {
+    "react": "^18.2.0",
+    "idb": "^8.0.0"
+  }
+}

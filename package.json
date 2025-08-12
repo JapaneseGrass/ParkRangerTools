@@ -1,0 +1,8 @@
+{
+  "name": "park-ranger-tools",
+  "private": true,
+  "workspaces": ["frontend", "backend"],
+  "scripts": {
+    "test": "echo 'No tests specified'"
+  }
+}
