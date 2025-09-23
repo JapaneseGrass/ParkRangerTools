@@ -4,56 +4,74 @@ Software tools to help park rangers perform their jobs more effectively.
 
 ## Truck Inspection App (MVP)
 
-The initial iteration of the Truck Inspection App is implemented as a lightweight
-Python service layer with an accompanying SQLite persistence layer. The service
-covers core MVP workflows:
+The MVP is a lightweight Python application that pairs a SQLite database with a
+minimal web interface. Rangers can log in, choose a truck, capture or upload the
+required inspection photos, drag a fuel gauge to record fuel levels, answer the
+quick or detailed checklist, add optional notes, and escalate issues for
+supervisor visibility. Supervisors can sign in to review submissions and see
+basic compliance metrics.
 
-- User management with ranger and supervisor roles.
-- Secure authentication tokens.
-- Truck catalog management (supervisor only).
-- Quick and detailed inspection flows with validated checklists.
-- Photo-count enforcement (4–10 per inspection) with on-device photo capture/upload support and an interactive fuel gauge.
-- Ranger follow-up notes within a 24-hour window.
-- Supervisor dashboard metrics for accountability and escalations.
+### Requirements
 
-The code lives under `backend/app` and exposes a high-level
-`TruckInspectionApp` class that coordinates authentication, inspection
-processing, and reporting.
+- Python 3.9 or newer
+- `pip` (only required to install optional test dependencies)
+- macOS, Linux, or Windows capable of running Python 3.9+
 
-### Running the app manually
+No third-party runtime libraries are required; the standard library powers both
+backend services and the web layer.
 
-The module can be executed directly to create a local SQLite database with seed
-data and provide credentials for exploratory scripting:
+### Setup
+
+1. Clone the repository and switch into it.
+2. (Optional) Create and activate a virtual environment:
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate  # Windows: .venv\Scripts\activate
+   ```
+3. (Optional) Install the development extras if you plan to run the tests:
+   ```bash
+   pip install -e .[dev]
+   ```
+
+### Database seeding and scripting
+
+Run the backend module directly to create a local SQLite database seeded with
+sample data. The script prints the default ranger and supervisor credentials and
+leaves a `truck_inspections.db` file in the project root.
 
 ```bash
 python -m backend.app.app
 ```
 
-This generates `truck_inspections.db` in the current directory with seed users
-and trucks. You can then import `TruckInspectionApp` in a Python REPL and use
-its methods to drive the workflows programmatically.
+You can then open a Python shell, import `TruckInspectionApp`, and call its
+methods to exercise authentication, inspection submission, and reporting flows
+programmatically.
 
 ### Running the web interface
 
-Run the web layer directly to start a local HTTP server:
+Start the bundled WSGI server to explore the UI in a browser:
 
 ```bash
 python -m frontend.app
 ```
 
-The server seeds a local `truck_inspections.db` file the first time it runs. Use
-the default accounts to explore the interface:
+Navigate to http://127.0.0.1:8000/ and sign in with one of the seeded accounts:
 
 - Ranger: `alex.ranger@example.com` / `rangerpass`
 - Supervisor: `sam.supervisor@example.com` / `supervisorpass`
 
+Uploaded photos are saved under `frontend/uploads/`, and the shared
+`truck_inspections.db` file keeps inspection history for both roles.
+
 ### Testing
 
-Install development dependencies (only `pytest`) if needed and run the tests:
+Run the pytest suite (after installing the optional dev dependencies) to verify
+the core flows:
 
 ```bash
 pytest
 ```
 
-The tests exercise the authentication, inspection creation, note policies, and
-dashboard aggregation logic using a temporary database for isolation.
+The tests cover authentication, photo validation, inspection creation, follow-up
+note windows, and supervisor dashboard metrics using an isolated temporary
+database.

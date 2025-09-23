@@ -1,11 +1,33 @@
 from __future__ import annotations
 
+import inspect
 from datetime import datetime, timedelta
 
 import pytest
 
 from backend.app import TruckInspectionApp
 from backend.app.auth import TOKEN_EXPIRY_MINUTES
+
+
+def test_dataclasses_do_not_use_slots() -> None:
+    from backend.app import app as app_module
+    from backend.app import auth as auth_module
+    from backend.app import forms as forms_module
+    from backend.app import inspections as inspections_module
+    from backend.app import models as models_module
+
+    modules = [app_module, auth_module, forms_module, inspections_module, models_module]
+    dataclass_params = []
+    for module in modules:
+        for _, obj in inspect.getmembers(module, inspect.isclass):
+            params = getattr(obj, "__dataclass_params__", None)
+            if params is not None:
+                dataclass_params.append(params)
+
+    assert dataclass_params, "Expected to discover dataclasses in backend modules"
+    assert all(
+        not getattr(params, "slots", False) for params in dataclass_params
+    ), "Dataclasses must not request slots for Python 3.9 compatibility"
 from backend.app.models import InspectionType, User, UserRole
 
 
