@@ -13,7 +13,8 @@ TOKEN_BYTES = 32
 TOKEN_EXPIRY_MINUTES = 12 * 60
 
 
-@dataclass(slots=True)
+
+@dataclass
 class AuthService:
     database: Database
 

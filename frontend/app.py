@@ -24,8 +24,6 @@ class UploadedFile:
     content_type: str
     data: bytes
 
-
-@dataclass
 class Request:
     method: str
     target: str
@@ -350,6 +348,7 @@ class TruckInspectionWebApp:
             <title>{html.escape(title)} - Truck Inspection App</title>
             <link rel=\"stylesheet\" href=\"/static/styles.css\" />
             <script src=\"/static/app.js\" defer></script>
+
           </head>
           <body>
             <header class=\"top-bar\">
@@ -476,6 +475,7 @@ class TruckInspectionWebApp:
                 if inspection.escalate_visibility
                 else "<span class=\"badge\">Normal</span>"
             )
+
             rows.append(
                 """
                 <tr>
@@ -494,6 +494,7 @@ class TruckInspectionWebApp:
                     ranger=html.escape(ranger.name),
                     created=inspection.created_at.strftime("%Y-%m-%d %H:%M"),
                     escalated=escalated,
+
                 )
             )
         return f"""
@@ -578,6 +579,7 @@ class TruckInspectionWebApp:
               <p class=\"muted small\">Use when immediate supervisor attention is required.</p>
             </div>
             <button type=\"submit\" class=\"primary-action\">Submit inspection</button>
+
           </form>
         </section>
         """
@@ -596,6 +598,7 @@ class TruckInspectionWebApp:
                     display = "Yes" if value else "No"
                 elif field.id == "fuel_level":
                     display = f"{html.escape(str(value))}%"
+
                 else:
                     display = html.escape(str(value))
                 response_items.append(f"<li><strong>{html.escape(field.label)}:</strong> {display}</li>")
@@ -614,6 +617,7 @@ class TruckInspectionWebApp:
         photos = "".join(
             f"<li><img src=\"{html.escape(url)}\" alt=\"Vehicle photo {index + 1}\" loading=\"lazy\" /></li>"
             for index, url in enumerate(inspection.photo_urls)
+
         )
         note_form = f"""
         <form method=\"post\" action=\"/inspections/{inspection.id}/notes\" class=\"form\">
@@ -625,6 +629,7 @@ class TruckInspectionWebApp:
         if user.role == UserRole.RANGER and inspection.ranger_id != user.id:
             note_form = ""
         notes_html = '<ul class="notes">' + ''.join(note_items) + '</ul>' if note_items else '<p class="muted">No notes yet.</p>'
+
         return f"""
         <section class=\"card\">
           <h1>Inspection {inspection.id}</h1>
@@ -639,6 +644,7 @@ class TruckInspectionWebApp:
           <ul class=\"responses\">{''.join(response_items)}</ul>
           <h2>Photos</h2>
           <ul class=\"photo-list\">{photos}</ul>
+
         </section>
         <section class=\"card\">
           <h2>Notes</h2>
@@ -725,6 +731,7 @@ class TruckInspectionWebApp:
             path.write_bytes(upload.data)
             saved.append(f"/uploads/{filename}")
         return saved
+
 
     def _build_inspection_view(self, inspection: Inspection, include_notes: bool = False) -> dict[str, Any]:
         truck = self.service.get_truck(inspection.truck_id)
