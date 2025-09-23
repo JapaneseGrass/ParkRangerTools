@@ -40,7 +40,7 @@ sample data. The script prints the default ranger and supervisor credentials and
 leaves a `truck_inspections.db` file in the project root.
 
 ```bash
-python -m backend.app.app
+python3 -m backend.app.app
 ```
 
 You can then open a Python shell, import `TruckInspectionApp`, and call its
@@ -52,7 +52,7 @@ programmatically.
 Start the bundled WSGI server to explore the UI in a browser:
 
 ```bash
-python -m frontend.app
+python3 -m frontend.app
 ```
 
 Navigate to http://127.0.0.1:8000/ and sign in with one of the seeded accounts:
