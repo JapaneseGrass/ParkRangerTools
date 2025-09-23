@@ -154,6 +154,42 @@ def test_supervisor_dashboard(client: FrontendClient):
     assert "Supervisor dashboard" in response.body
 
 
+def test_incomplete_inspection_preserves_form(app, client: FrontendClient):
+    login(client, "alex.ranger@example.com", "rangerpass")
+    service = app.service
+    user = service.database.get_user_by_email("alex.ranger@example.com")
+    assert user is not None
+    truck = service.list_trucks()[0]
+
+    form_definition = get_form_definition(InspectionType.QUICK)
+    form_data: dict[str, str] = {}
+    for field in form_definition:
+        if field.field_type is FieldType.BOOLEAN:
+            form_data[field.id] = "yes"
+        elif field.field_type is FieldType.TEXT:
+            if field.id == "fuel_level":
+                form_data[field.id] = "75"
+            else:
+                form_data[field.id] = "All good"
+        elif field.field_type is FieldType.NUMBER:
+            form_data[field.id] = "123"
+    form_data["escalate_visibility"] = "1"
+
+    response = client.request(
+        "POST",
+        f"/trucks/{truck.id}/inspect/{InspectionType.QUICK.value}",
+        data=form_data,
+        follow_redirects=False,
+    )
+
+    assert response.status == HTTPStatus.OK
+    assert "Please provide between 4 and 10 photos." in response.body
+    assert "name=\"exterior_clean\" value=\"yes\" checked" in response.body
+    assert "data-fuel-value>75%" in response.body
+    assert "escalate_visibility\" id=\"escalate_visibility\" value=\"1\"" in response.body
+    assert "aria-pressed=\"true\"" in response.body
+
+
 def test_supervisor_can_submit_inspection(app, client: FrontendClient):
     response = login(client, "sam.supervisor@example.com", "supervisorpass")
     assert "Quick report" in response.body

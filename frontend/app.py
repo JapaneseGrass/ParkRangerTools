@@ -349,6 +349,7 @@ class TruckInspectionWebApp:
         except ValueError:
             return self._not_found()
         fields = get_form_definition(inspection_enum)
+        preserved = self._preserve_form_state(request)
         if request.method == "POST":
             try:
                 responses = self._collect_responses(request, inspection_enum)
@@ -366,7 +367,8 @@ class TruckInspectionWebApp:
                 return self._redirect(f"/inspections/{inspection.id}")
             except ValueError as exc:
                 self._flash(request, "error", str(exc))
-        content = self._render_inspection_form(truck, inspection_enum, fields)
+                preserved = self._preserve_form_state(request)
+        content = self._render_inspection_form(truck, inspection_enum, fields, preserved)
         return self._page(f"{inspection_enum.value.title()} inspection", user, content)
 
     def _inspection_list(self, request: Request) -> Response:
@@ -595,24 +597,37 @@ class TruckInspectionWebApp:
         </section>
         """
 
-    def _render_inspection_form(self, truck: Truck, inspection_type: InspectionType, fields: Iterable[Any]) -> str:
+    def _render_inspection_form(
+        self,
+        truck: Truck,
+        inspection_type: InspectionType,
+        fields: Iterable[Any],
+        preserved: dict[str, Any] | None = None,
+    ) -> str:
+        preserved = preserved or {}
         field_html: list[str] = []
         for field in fields:
             label = html.escape(field.label)
             if field.field_type is FieldType.BOOLEAN:
+                yes_checked = "checked" if preserved.get(field.id) == "yes" else ""
+                no_checked = "checked" if preserved.get(field.id) == "no" else ""
                 field_html.append(
                     f"""
                     <div class=\"form-field\">
                       <label>{label}</label>
                       <div class=\"radio-group\">
-                        <label><input type=\"radio\" name=\"{field.id}\" value=\"yes\" required /> Yes</label>
-                        <label><input type=\"radio\" name=\"{field.id}\" value=\"no\" required /> No</label>
+                        <label><input type=\"radio\" name=\"{field.id}\" value=\"yes\" {yes_checked} required /> Yes</label>
+                        <label><input type=\"radio\" name=\"{field.id}\" value=\"no\" {no_checked} required /> No</label>
                       </div>
                     </div>
                     """
                 )
             elif field.field_type is FieldType.TEXT:
                 if field.id == "fuel_level":
+                    fuel_value = preserved.get(field.id)
+                    if fuel_value is None:
+                        fuel_value = "50"
+                    slider_value = html.escape(str(fuel_value))
                     field_html.append(
                         f"""
                         <div class=\"form-field fuel-field\">
@@ -623,45 +638,52 @@ class TruckInspectionWebApp:
                               <div class=\"gauge-center\"></div>
                               <div class=\"gauge-labels\"><span>E</span><span>1/2</span><span>F</span></div>
                             </div>
-                            <input type=\"range\" min=\"0\" max=\"100\" step=\"5\" value=\"50\" data-fuel-slider />
+                            <input type=\"range\" min=\"0\" max=\"100\" step=\"5\" value=\"{slider_value}\" data-fuel-slider />
                           </div>
-                          <div class=\"fuel-reading\"><span data-fuel-value>50%</span></div>
-                          <input type=\"hidden\" id=\"{field.id}\" name=\"{field.id}\" value=\"50\" required />
+                          <div class=\"fuel-reading\"><span data-fuel-value>{slider_value}%</span></div>
+                          <input type=\"hidden\" id=\"{field.id}\" name=\"{field.id}\" value=\"{slider_value}\" required />
                         </div>
                         """
                     )
                 else:
                     required = " required" if field.required else ""
+                    value = html.escape(str(preserved.get(field.id, "")))
                     field_html.append(
                         f"""
                         <div class=\"form-field\">
                           <label for=\"{field.id}\">{label}</label>
-                          <textarea id=\"{field.id}\" name=\"{field.id}\"{required}></textarea>
+                          <textarea id=\"{field.id}\" name=\"{field.id}\"{required}>{value}</textarea>
                         </div>
                         """
                     )
             elif field.field_type is FieldType.NUMBER:
                 required = " required" if field.required else ""
+                value = html.escape(str(preserved.get(field.id, ""))) if field.id in preserved else ""
+                value_attr = f" value=\"{value}\"" if value else ""
                 field_html.append(
                     f"""
                     <div class=\"form-field\">
                       <label for=\"{field.id}\">{label}</label>
-                      <input type=\"number\" id=\"{field.id}\" name=\"{field.id}\"{required} />
+                      <input type=\"number\" id=\"{field.id}\" name=\"{field.id}\"{value_attr}{required} />
                     </div>
                     """
                 )
+        escalate_checked = "active" if preserved.get("escalate_visibility") == "1" else ""
+        escalate_pressed = "true" if preserved.get("escalate_visibility") == "1" else "false"
+        escalate_value = preserved.get("escalate_visibility", "0")
         return f"""
         <section class=\"card\">
           <h1>{inspection_type.value.title()} inspection for {html.escape(truck.identifier)}</h1>
           <form method=\"post\" class=\"form\" enctype=\"multipart/form-data\">
             {''.join(field_html)}
+            <input type=\"hidden\" name=\"__preserve__\" value=\"1\" />
             <div class=\"form-field\">
               <label for=\"photos\">Vehicle photos <span class=\"muted\">(Capture or upload 4-10 images)</span></label>
               <input type=\"file\" id=\"photos\" name=\"photos\" accept=\"image/*\" capture=\"environment\" multiple required />
             </div>
             <div class=\"form-field escalate-field\">
-              <input type=\"hidden\" name=\"escalate_visibility\" id=\"escalate_visibility\" value=\"0\" />
-              <button type=\"button\" class=\"escalate-button\" data-escalate-toggle data-target=\"escalate_visibility\" aria-pressed=\"false\">
+              <input type=\"hidden\" name=\"escalate_visibility\" id=\"escalate_visibility\" value=\"{escalate_value}\" />
+              <button type=\"button\" class=\"escalate-button {escalate_checked}\" data-escalate-toggle data-target=\"escalate_visibility\" aria-pressed=\"{escalate_pressed}\">
                 Escalate to supervisors
               </button>
               <p class=\"muted small\">Use when immediate supervisor attention is required.</p>
@@ -670,6 +692,19 @@ class TruckInspectionWebApp:
           </form>
         </section>
         """
+
+    def _preserve_form_state(self, request: Request) -> dict[str, str]:
+        if request.method != "POST":
+            return {}
+        preserved: dict[str, str] = {}
+        for key, values in request.form.items():
+            if not values or key == "__preserve__":
+                continue
+            preserved[key] = values[0]
+        escalate = request.form_value("escalate_visibility")
+        if escalate is not None:
+            preserved["escalate_visibility"] = escalate
+        return preserved
 
     def _render_inspection_detail(self, user: User, view: dict[str, Any]) -> str:
         inspection: Inspection = view["inspection"]
