@@ -192,3 +192,17 @@ def test_ranger_only_sees_own_inspections(seeded_app: TruckInspectionApp, ranger
     assert len(ranger_inspections) == 1
     supervisor_inspections = seeded_app.list_inspections(requester=supervisor)
     assert len(supervisor_inspections) == 2
+
+
+def test_seeded_truck_identifiers(seeded_app: TruckInspectionApp) -> None:
+    identifiers = {truck.identifier for truck in seeded_app.list_trucks()}
+    assert identifiers == {
+        "427",
+        "P0101",
+        "P0103",
+        "P0106",
+        "SM88",
+        "T1",
+        "T2",
+        "T3",
+    }

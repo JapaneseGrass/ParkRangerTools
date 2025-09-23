@@ -18,6 +18,84 @@ from backend.app.forms import FieldType, get_form_definition
 from backend.app.models import Inspection, InspectionType, Truck, User, UserRole
 
 
+TRUCK_CATEGORY_MAP: dict[str, str] = {
+    "SM88": "full_size",
+    "P0106": "full_size",
+    "P0101": "mid_size",
+    "P0103": "mid_size",
+    "427": "mid_size",
+    "T1": "maintenance",
+    "T2": "maintenance",
+    "T3": "maintenance",
+}
+
+TRUCK_CATEGORY_INFO: dict[str, dict[str, str]] = {
+    "full_size": {
+        "label": "Ford F-150",
+        "badge_class": "full-size",
+        "icon": """
+        <svg class=\"truck-icon\" viewBox=\"0 0 140 64\" role=\"img\" aria-label=\"Full-size pickup\">
+          <rect x=\"18\" y=\"30\" width=\"90\" height=\"22\" rx=\"6\" fill=\"#2f6b3c\" />
+          <rect x=\"82\" y=\"22\" width=\"36\" height=\"20\" rx=\"6\" fill=\"#24512c\" />
+          <rect x=\"90\" y=\"26\" width=\"20\" height=\"12\" rx=\"3\" fill=\"#e6f2eb\" />
+          <rect x=\"30\" y=\"32\" width=\"18\" height=\"8\" rx=\"3\" fill=\"#f8e1a0\" />
+          <circle cx=\"42\" cy=\"56\" r=\"9\" fill=\"#1f2a24\" />
+          <circle cx=\"96\" cy=\"56\" r=\"9\" fill=\"#1f2a24\" />
+          <circle cx=\"42\" cy=\"56\" r=\"4\" fill=\"#d4dad6\" />
+          <circle cx=\"96\" cy=\"56\" r=\"4\" fill=\"#d4dad6\" />
+        </svg>
+        """,
+    },
+    "mid_size": {
+        "label": "Chevy Colorado",
+        "badge_class": "mid-size",
+        "icon": """
+        <svg class=\"truck-icon\" viewBox=\"0 0 140 64\" role=\"img\" aria-label=\"Mid-size pickup\">
+          <rect x=\"20\" y=\"32\" width=\"80\" height=\"20\" rx=\"6\" fill=\"#c47a3a\" />
+          <rect x=\"74\" y=\"24\" width=\"32\" height=\"18\" rx=\"6\" fill=\"#a9622a\" />
+          <rect x=\"80\" y=\"28\" width=\"16\" height=\"10\" rx=\"3\" fill=\"#f4e6da\" />
+          <rect x=\"28\" y=\"34\" width=\"16\" height=\"6\" rx=\"3\" fill=\"#f6d28f\" />
+          <circle cx=\"40\" cy=\"56\" r=\"8.5\" fill=\"#1f2a24\" />
+          <circle cx=\"92\" cy=\"56\" r=\"8.5\" fill=\"#1f2a24\" />
+          <circle cx=\"40\" cy=\"56\" r=\"3.8\" fill=\"#f4dfc6\" />
+          <circle cx=\"92\" cy=\"56\" r=\"3.8\" fill=\"#f4dfc6\" />
+        </svg>
+        """,
+    },
+    "maintenance": {
+        "label": "F-150 Flatbed",
+        "badge_class": "maintenance",
+        "icon": """
+        <svg class=\"truck-icon\" viewBox=\"0 0 148 64\" role=\"img\" aria-label=\"Flatbed pickup\">
+          <rect x=\"20\" y=\"34\" width=\"58\" height=\"20\" rx=\"5\" fill=\"#6c7568\" />
+          <rect x=\"74\" y=\"26\" width=\"32\" height=\"18\" rx=\"6\" fill=\"#879182\" />
+          <rect x=\"104\" y=\"34\" width=\"22\" height=\"20\" rx=\"4\" fill=\"#a0a89c\" />
+          <rect x=\"80\" y=\"30\" width=\"16\" height=\"10\" rx=\"3\" fill=\"#edf0e6\" />
+          <rect x=\"26\" y=\"36\" width=\"20\" height=\"6\" rx=\"2\" fill=\"#f7d56b\" />
+          <circle cx=\"38\" cy=\"56\" r=\"8.5\" fill=\"#1f2a24\" />
+          <circle cx=\"92\" cy=\"56\" r=\"8.5\" fill=\"#1f2a24\" />
+          <circle cx=\"38\" cy=\"56\" r=\"3.8\" fill=\"#dfe8de\" />
+          <circle cx=\"92\" cy=\"56\" r=\"3.8\" fill=\"#dfe8de\" />
+        </svg>
+        """,
+    },
+    "default": {
+        "label": "Park vehicle",
+        "badge_class": "default",
+        "icon": """
+        <svg class=\"truck-icon\" viewBox=\"0 0 140 68\" role=\"img\" aria-label=\"Park vehicle\">
+          <rect x=\"20\" y=\"34\" width=\"66\" height=\"20\" rx=\"6\" fill=\"#4f7460\" />
+          <rect x=\"68\" y=\"26\" width=\"30\" height=\"18\" rx=\"6\" fill=\"#6d8f7f\" />
+          <circle cx=\"36\" cy=\"56\" r=\"8\" fill=\"#2b2b2b\" />
+          <circle cx=\"82\" cy=\"56\" r=\"8\" fill=\"#2b2b2b\" />
+          <circle cx=\"36\" cy=\"56\" r=\"3.5\" fill=\"#dfe8de\" />
+          <circle cx=\"82\" cy=\"56\" r=\"3.5\" fill=\"#dfe8de\" />
+        </svg>
+        """,
+    },
+}
+
+
 @dataclass
 class UploadedFile:
     filename: str
@@ -443,19 +521,9 @@ class TruckInspectionWebApp:
         """
 
     def _render_home(self, user: User, trucks: list[Truck], inspections: list[dict[str, Any]]) -> str:
-        truck_cards = "".join(
-            f"""
-            <article class=\"card\">
-              <h2>{html.escape(truck.identifier)}</h2>
-              <p class=\"muted\">{html.escape(truck.description or 'No description')}</p>
-              <div class=\"actions\">
-                <a class=\"button\" href=\"/trucks/{truck.id}/inspect/quick\">Quick report</a>
-                <a class=\"button secondary\" href=\"/trucks/{truck.id}/inspect/detailed\">Detailed report</a>
-              </div>
-            </article>
-            """
-            for truck in trucks
-        ) or "<p class=\"muted\">No trucks available.</p>"
+        truck_cards = "".join(self._render_truck_card(truck) for truck in trucks)
+        if not truck_cards:
+            truck_cards = "<p class=\"muted\">No trucks available.</p>"
         inspections_html = self._render_inspection_table("Your recent inspections", inspections)
         return f"""
         <section class=\"card\">
@@ -465,6 +533,24 @@ class TruckInspectionWebApp:
         </section>
         {inspections_html}
         """
+
+    def _render_truck_card(self, truck: Truck) -> str:
+        profile = self._truck_profile(truck)
+        badge_class = profile["badge_class"]
+        graphic_class = f"truck-card__graphic truck-card__graphic--{badge_class}"
+        icon_html = profile["icon"]
+        return (
+            f"""
+            <article class=\"card truck-card\">
+              <div class=\"{graphic_class}\">{icon_html}</div>
+              <h2>{html.escape(truck.identifier)}</h2>
+              <div class=\"actions\">
+                <a class=\"button\" href=\"/trucks/{truck.id}/inspect/quick\">Quick report</a>
+                <a class=\"button secondary\" href=\"/trucks/{truck.id}/inspect/detailed\">Detailed report</a>
+              </div>
+            </article>
+            """
+        )
 
     def _render_inspection_table(self, heading: str, inspections: list[dict[str, Any]]) -> str:
         if not inspections:
@@ -710,6 +796,26 @@ class TruckInspectionWebApp:
                     raise ValueError(f"'{field.label}' must be a number.")
                 responses[field.id] = int(cleaned)
         return responses
+
+    def _truck_profile(self, truck: Truck) -> dict[str, str]:
+        identifier = truck.identifier.upper()
+        category = TRUCK_CATEGORY_MAP.get(identifier)
+        if category is None:
+            if identifier.startswith("S"):
+                category = "full_size"
+            elif identifier.startswith("P") or identifier.isdigit():
+                category = "mid_size"
+            elif identifier.startswith("T"):
+                category = "maintenance"
+            else:
+                category = "default"
+        info = TRUCK_CATEGORY_INFO.get(category, TRUCK_CATEGORY_INFO["default"])
+        return {
+            "category": category,
+            "label": info["label"],
+            "badge_class": info["badge_class"],
+            "icon": info["icon"].strip(),
+        }
 
     def _collect_photos(self, request: Request) -> list[str]:
         uploads = request.file_values("photos")

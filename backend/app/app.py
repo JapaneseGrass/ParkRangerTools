@@ -39,12 +39,19 @@ class TruckInspectionApp:
                 password="supervisorpass",
                 role=UserRole.SUPERVISOR,
             )
-        if not self.database.get_truck_by_identifier("TR-100"):
-            self.database.add_truck("TR-100", "Medical response vehicle")
-        if not self.database.get_truck_by_identifier("TR-200"):
-            self.database.add_truck("TR-200", "Trail support truck")
-        if not self.database.get_truck_by_identifier("TR-300"):
-            self.database.add_truck("TR-300", "Logistics hauler")
+        truck_definitions = [
+            ("SM88", None),
+            ("P0106", None),
+            ("P0101", None),
+            ("P0103", None),
+            ("427", None),
+            ("T1", None),
+            ("T2", None),
+            ("T3", None),
+        ]
+        for identifier, description in truck_definitions:
+            if not self.database.get_truck_by_identifier(identifier):
+                self.database.add_truck(identifier, description)
 
     # Truck operations
     def list_trucks(self) -> List[Truck]:

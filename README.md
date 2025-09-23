@@ -39,6 +39,12 @@ Run the backend module directly to create a local SQLite database seeded with
 sample data. The script prints the default ranger and supervisor credentials and
 leaves a `truck_inspections.db` file in the project root.
 
+The default HQ fleet seeded into the database includes:
+
+- Full-size ranger trucks: `SM88`, `P0106`
+- Mid-size trucks: `P0101`, `P0103`, `427`
+- Maintenance trucks: `T1`, `T2`, `T3`
+
 ```bash
 python3 -m backend.app.app
 ```
