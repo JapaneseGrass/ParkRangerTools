@@ -33,7 +33,6 @@ class InspectionType(str, Enum):
     QUICK = "quick"
     DETAILED = "detailed"
 
-
 @dataclass
 class Inspection:
     id: int
