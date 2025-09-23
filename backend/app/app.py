@@ -10,7 +10,7 @@ from .inspections import InspectionService
 from .models import Inspection, InspectionNote, InspectionType, Truck, User, UserRole
 
 
-@dataclass(slots=True)
+@dataclass
 class TruckInspectionApp:
     database: Database
     auth: AuthService

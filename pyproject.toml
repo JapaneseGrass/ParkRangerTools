@@ -2,7 +2,9 @@
 name = "park-ranger-tools"
 version = "0.1.0"
 description = "Truck inspection app backend"
-requires-python = ">=3.11"
+
+requires-python = ">=3.9"
+
 authors = [
   { name = "Park Ranger Tools" }
 ]

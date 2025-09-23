@@ -11,7 +11,7 @@ class UserRole(str, Enum):
     SUPERVISOR = "supervisor"
 
 
-@dataclass(slots=True)
+@dataclass
 class User:
     id: int
     name: str
@@ -21,7 +21,9 @@ class User:
     created_at: datetime
 
 
-@dataclass(slots=True)
+
+
+@dataclass
 class Truck:
     id: int
     identifier: str
@@ -34,7 +36,8 @@ class InspectionType(str, Enum):
     DETAILED = "detailed"
 
 
-@dataclass(slots=True)
+
+@dataclass
 class Inspection:
     id: int
     inspection_type: InspectionType
@@ -48,7 +51,8 @@ class Inspection:
     updated_at: datetime
 
 
-@dataclass(slots=True)
+
+@dataclass
 class InspectionNote:
     id: int
     inspection_id: int
@@ -57,7 +61,7 @@ class InspectionNote:
     created_at: datetime
 
 
-@dataclass(slots=True)
+@dataclass
 class SessionToken:
     id: int
     user_id: int
