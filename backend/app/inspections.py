@@ -13,7 +13,6 @@ PHOTO_MAX = 10
 NOTE_WINDOW_HOURS = 24
 
 
-
 @dataclass
 class InspectionService:
     database: Database

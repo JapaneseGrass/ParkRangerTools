@@ -11,7 +11,6 @@ class UserRole(str, Enum):
     SUPERVISOR = "supervisor"
 
 
-
 @dataclass
 class User:
     id: int
@@ -20,7 +19,6 @@ class User:
     password_hash: str
     role: UserRole
     created_at: datetime
-
 
 
 @dataclass
@@ -34,9 +32,6 @@ class Truck:
 class InspectionType(str, Enum):
     QUICK = "quick"
     DETAILED = "detailed"
-
-
-
 
 @dataclass
 class Inspection:
@@ -52,8 +47,6 @@ class Inspection:
     updated_at: datetime
 
 
-
-
 @dataclass
 class InspectionNote:
     id: int
@@ -64,7 +57,6 @@ class InspectionNote:
 
 
 @dataclass
-
 class SessionToken:
     id: int
     user_id: int

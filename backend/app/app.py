@@ -10,7 +10,6 @@ from .inspections import InspectionService
 from .models import Inspection, InspectionNote, InspectionType, Truck, User, UserRole
 
 
-
 @dataclass
 class TruckInspectionApp:
     database: Database

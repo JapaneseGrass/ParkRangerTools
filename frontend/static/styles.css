@@ -11,7 +11,6 @@
   --success: #2e7d32;
   --error: #c0392b;
   --shadow: rgba(32, 49, 32, 0.12);
-
 }
 
 * {
@@ -26,7 +25,6 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-
 }
 
 .top-bar {
@@ -114,7 +112,6 @@ body {
 
 .button.secondary {
   background: rgba(47, 107, 60, 0.08);
-
   color: var(--primary);
   border: 1px solid var(--primary);
 }
