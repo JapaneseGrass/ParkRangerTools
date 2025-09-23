@@ -1,0 +1,761 @@
+from __future__ import annotations
+
+import html
+import mimetypes
+import secrets
+import uuid
+from dataclasses import dataclass, field
+from email.parser import BytesParser
+from email.policy import default
+from http import HTTPStatus
+from http.cookies import SimpleCookie
+from pathlib import Path
+from typing import Any, Callable, Iterable, Optional
+from urllib.parse import parse_qs, urlparse
+
+from backend.app.app import TruckInspectionApp
+from backend.app.forms import FieldType, get_form_definition
+from backend.app.models import Inspection, InspectionType, Truck, User, UserRole
+
+
+@dataclass
+class UploadedFile:
+    filename: str
+    content_type: str
+    data: bytes
+
+class Request:
+    method: str
+    target: str
+    headers: dict[str, str]
+    body: bytes = b""
+
+    def __post_init__(self) -> None:
+        parsed = urlparse(self.target)
+        self.path = parsed.path or "/"
+        self.query = parse_qs(parsed.query)
+        self.form: dict[str, list[str]] = {}
+        self.files: dict[str, list[UploadedFile]] = {}
+        if self.method in {"POST", "PUT"}:
+            content_type = self.headers.get("Content-Type", "")
+            if "application/x-www-form-urlencoded" in content_type:
+                self.form = parse_qs(self.body.decode("utf-8"))
+            elif "multipart/form-data" in content_type:
+                self._parse_multipart(content_type)
+        cookie_header = self.headers.get("Cookie", "")
+        cookie = SimpleCookie(cookie_header)
+        self.cookies = {key: morsel.value for key, morsel in cookie.items()}
+
+    def form_value(self, name: str, default: Optional[str] = None) -> Optional[str]:
+        values = self.form.get(name)
+        return values[0] if values else default
+
+    def form_values(self, name: str) -> list[str]:
+        return self.form.get(name, [])
+
+    def file_values(self, name: str) -> list[UploadedFile]:
+        return self.files.get(name, [])
+
+    def _parse_multipart(self, content_type: str) -> None:
+        message = BytesParser(policy=default).parsebytes(
+            f"Content-Type: {content_type}\r\n\r\n".encode("utf-8") + self.body
+        )
+        for part in message.iter_parts():
+            if part.get_content_disposition() != "form-data":
+                continue
+            name = part.get_param("name", header="Content-Disposition")
+            if not name:
+                continue
+            filename = part.get_param("filename", header="Content-Disposition")
+            payload = part.get_payload(decode=True)
+            if filename:
+                upload = UploadedFile(
+                    filename=filename,
+                    content_type=part.get_content_type(),
+                    data=payload,
+                )
+                self.files.setdefault(name, []).append(upload)
+            else:
+                charset = part.get_content_charset("utf-8") or "utf-8"
+                value = payload.decode(charset)
+                self.form.setdefault(name, []).append(value)
+
+    def cookie(self, name: str) -> Optional[str]:
+        return self.cookies.get(name)
+
+
+@dataclass
+class Response:
+    status: int = HTTPStatus.OK
+    headers: list[tuple[str, str]] = field(default_factory=list)
+    body: bytes | str = ""
+
+    def set_cookie(self, name: str, value: str, *, path: str = "/", max_age: Optional[int] = None) -> None:
+        cookie = SimpleCookie()
+        cookie[name] = value
+        cookie[name]["path"] = path
+        if max_age is not None:
+            cookie[name]["max-age"] = str(max_age)
+        header_value = cookie.output(header="")
+        self.headers.append(("Set-Cookie", header_value.strip()))
+
+    def add_header(self, name: str, value: str) -> None:
+        self.headers.append((name, value))
+
+
+class TruckInspectionWebApp:
+    def __init__(self, database_path: Path) -> None:
+        self.service = TruckInspectionApp.create(database_path)
+        self.service.seed_defaults()
+        self.sessions: dict[str, int] = {}
+        self.flash_messages: dict[str, list[tuple[str, str]]] = {}
+        self.static_dir = Path(__file__).parent / "static"
+        self.upload_dir = Path(__file__).parent / "uploads"
+        self.upload_dir.mkdir(parents=True, exist_ok=True)
+
+    # Public API -----------------------------------------------------------------
+    def wsgi_app(self, environ: dict[str, Any], start_response: Callable) -> Iterable[bytes]:
+        method = environ["REQUEST_METHOD"]
+        target = environ.get("RAW_URI") or environ.get("PATH_INFO", "/")
+        if environ.get("QUERY_STRING") and "?" not in target:
+            target = f"{target}?{environ['QUERY_STRING']}"
+        length = int(environ.get("CONTENT_LENGTH") or 0)
+        body = environ["wsgi.input"].read(length) if length else b""
+        headers = {key: value for key, value in environ.items() if key.startswith("HTTP_")}
+        if "CONTENT_TYPE" in environ:
+            headers["Content-Type"] = environ["CONTENT_TYPE"]
+        if "HTTP_COOKIE" in environ:
+            headers["Cookie"] = environ["HTTP_COOKIE"]
+        request = Request(method=method, target=target, headers=headers, body=body)
+        response = self.handle(request)
+        start_response(f"{response.status.value} {response.status.phrase}", response.headers)
+        body = response.body if isinstance(response.body, bytes) else response.body.encode("utf-8")
+        return [body]
+
+    def handle(self, request: Request) -> Response:
+        if request.method == "GET" and request.path.startswith("/static/"):
+            filename = request.path.split("/", 2)[-1]
+            return self._serve_static(filename)
+        if request.method == "GET" and request.path.startswith("/uploads/"):
+            filename = request.path.split("/", 2)[-1]
+            return self._serve_upload(filename)
+
+        route = self._match_route(request)
+        if not route:
+            return self._not_found()
+        handler, params = route
+        response = handler(request, **params)
+        if not any(name.lower() == "content-type" for name, _ in response.headers):
+            response.add_header("Content-Type", "text/html; charset=utf-8")
+        if not (300 <= response.status.value < 400) and isinstance(response.body, str):
+            messages = self._consume_messages(request)
+            if messages:
+                response.body = response.body.replace("<!--FLASH-->", self._render_messages(messages))
+            else:
+                response.body = response.body.replace("<!--FLASH-->", "")
+        return response
+
+    def run(self, host: str = "127.0.0.1", port: int = 8000) -> None:
+        from wsgiref.simple_server import make_server
+
+        with make_server(host, port, self.wsgi_app) as httpd:
+            print(f"Serving on http://{host}:{port}")
+            httpd.serve_forever()
+
+    # Routing --------------------------------------------------------------------
+    def _match_route(self, request: Request) -> Optional[tuple[Callable, dict[str, Any]]]:
+        simple_routes: dict[tuple[str, str], Callable[[Request], Response]] = {
+            ("GET", "/"): self._home,
+            ("GET", "/login"): self._login_get,
+            ("POST", "/login"): self._login_post,
+            ("GET", "/logout"): self._logout,
+            ("GET", "/inspections"): self._inspection_list,
+            ("GET", "/dashboard"): self._dashboard,
+        }
+        handler = simple_routes.get((request.method, request.path))
+        if handler:
+            return handler, {}
+
+        if request.path.startswith("/trucks/"):
+            parts = request.path.strip("/").split("/")
+            if len(parts) == 4 and parts[2] == "inspect":
+                return self._truck_inspection, {"truck_id": parts[1], "inspection_type": parts[3]}
+        if request.path.startswith("/inspections/"):
+            parts = request.path.strip("/").split("/")
+            if len(parts) == 2 and request.method == "GET":
+                return self._inspection_detail, {"inspection_id": parts[1]}
+            if len(parts) == 3 and parts[2] == "notes" and request.method == "POST":
+                return self._add_note, {"inspection_id": parts[1]}
+        return None
+
+    # Session helpers ------------------------------------------------------------
+    def _current_user(self, request: Request) -> Optional[User]:
+        token = request.cookie("session_id")
+        if not token:
+            return None
+        user_id = self.sessions.get(token)
+        if not user_id:
+            return None
+        return self.service.database.get_user(user_id)
+
+    def _set_session(self, response: Response, user: User) -> str:
+        token = secrets.token_urlsafe(24)
+        self.sessions[token] = user.id
+        response.set_cookie("session_id", token, path="/")
+        return token
+
+    def _clear_session(self, request: Request, response: Response) -> None:
+        token = request.cookie("session_id")
+        if token:
+            self.sessions.pop(token, None)
+            response.set_cookie("session_id", "", path="/", max_age=0)
+
+    def _flash(self, request: Request, category: str, message: str, *, token: Optional[str] = None) -> None:
+        key = token or request.cookie("session_id") or "__anon__"
+        self.flash_messages.setdefault(key, []).append((category, message))
+
+    def _consume_messages(self, request: Request) -> list[tuple[str, str]]:
+        key = request.cookie("session_id") or "__anon__"
+        return self.flash_messages.pop(key, [])
+
+    # Route handlers -------------------------------------------------------------
+    def _home(self, request: Request) -> Response:
+        user = self._current_user(request)
+        if not user:
+            return self._redirect("/login")
+        if user.role == UserRole.SUPERVISOR:
+            return self._redirect("/dashboard")
+        trucks = self.service.list_trucks()
+        inspections = [self._build_inspection_view(insp) for insp in self.service.list_inspections(requester=user)]
+        content = self._render_home(user, trucks, inspections)
+        return self._page("Ranger Home", user, content)
+
+    def _login_get(self, request: Request) -> Response:
+        return self._page("Sign in", None, self._render_login())
+
+    def _login_post(self, request: Request) -> Response:
+        email = (request.form_value("email") or "").strip()
+        password = request.form_value("password") or ""
+        token = self.service.auth.authenticate(email, password)
+        if token is None:
+            self._flash(request, "error", "Invalid credentials. Please try again.")
+            return self._page("Sign in", None, self._render_login())
+        user = self.service.database.get_user(token.user_id)
+        response = self._redirect("/")
+        if user:
+            session_token = self._set_session(response, user)
+            self._flash(request, "success", "Signed in successfully.", token=session_token)
+        return response
+
+    def _logout(self, request: Request) -> Response:
+        response = self._redirect("/login")
+        self._clear_session(request, response)
+        self._flash(request, "info", "Signed out.")
+        return response
+
+    def _truck_inspection(self, request: Request, *, truck_id: str, inspection_type: str) -> Response:
+        user = self._current_user(request)
+        if not user:
+            return self._redirect("/login")
+        try:
+            truck = self.service.get_truck(int(truck_id))
+        except (ValueError, LookupError):
+            return self._not_found()
+        try:
+            inspection_enum = InspectionType(inspection_type)
+        except ValueError:
+            return self._not_found()
+        fields = get_form_definition(inspection_enum)
+        if request.method == "POST":
+            try:
+                responses = self._collect_responses(request, inspection_enum)
+                photos = self._collect_photos(request)
+                escalate = request.form_value("escalate_visibility") == "1"
+                inspection = self.service.submit_inspection(
+                    user=user,
+                    truck=truck,
+                    inspection_type=inspection_enum,
+                    responses=responses,
+                    photo_urls=photos,
+                    escalate_visibility=escalate,
+                )
+                self._flash(request, "success", "Inspection submitted successfully.")
+                return self._redirect(f"/inspections/{inspection.id}")
+            except ValueError as exc:
+                self._flash(request, "error", str(exc))
+        content = self._render_inspection_form(truck, inspection_enum, fields)
+        return self._page(f"{inspection_enum.value.title()} inspection", user, content)
+
+    def _inspection_list(self, request: Request) -> Response:
+        user = self._current_user(request)
+        if not user:
+            return self._redirect("/login")
+        inspections = [self._build_inspection_view(insp) for insp in self.service.list_inspections(requester=user)]
+        content = self._render_inspection_table("Inspections", inspections)
+        return self._page("Inspections", user, content)
+
+    def _inspection_detail(self, request: Request, *, inspection_id: str) -> Response:
+        user = self._current_user(request)
+        if not user:
+            return self._redirect("/login")
+        try:
+            inspection = self.service.get_inspection(requester=user, inspection_id=int(inspection_id))
+        except (ValueError, LookupError, PermissionError):
+            return self._not_found()
+        view = self._build_inspection_view(inspection, include_notes=True)
+        content = self._render_inspection_detail(user, view)
+        return self._page(f"Inspection {inspection.id}", user, content)
+
+    def _add_note(self, request: Request, *, inspection_id: str) -> Response:
+        user = self._current_user(request)
+        if not user:
+            return self._redirect("/login")
+        try:
+            inspection = self.service.get_inspection(requester=user, inspection_id=int(inspection_id))
+        except (ValueError, LookupError, PermissionError):
+            return self._not_found()
+        content = (request.form_value("content") or "").strip()
+        if not content:
+            self._flash(request, "error", "Note content cannot be empty.")
+            return self._redirect(f"/inspections/{inspection.id}")
+        try:
+            self.service.add_note(requester=user, inspection=inspection, content=content)
+            self._flash(request, "success", "Note added.")
+        except ValueError as exc:
+            self._flash(request, "error", str(exc))
+        return self._redirect(f"/inspections/{inspection.id}")
+
+    def _dashboard(self, request: Request) -> Response:
+        user = self._current_user(request)
+        if not user:
+            return self._redirect("/login")
+        if user.role != UserRole.SUPERVISOR:
+            return self._not_found()
+        metrics = self.service.dashboard(supervisor=user)
+        inspections = [self._build_inspection_view(insp) for insp in self.service.list_inspections(requester=user)]
+        content = self._render_dashboard(metrics, inspections)
+        return self._page("Supervisor dashboard", user, content)
+
+    # Utility responses ----------------------------------------------------------
+    def _page(self, title: str, user: Optional[User], content: str) -> Response:
+        nav = self._nav_links(user)
+        body = f"""
+        <!doctype html>
+        <html lang=\"en\">
+          <head>
+            <meta charset=\"utf-8\" />
+            <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+            <title>{html.escape(title)} - Truck Inspection App</title>
+            <link rel=\"stylesheet\" href=\"/static/styles.css\" />
+            <script src=\"/static/app.js\" defer></script>
+
+          </head>
+          <body>
+            <header class=\"top-bar\">
+              <div class=\"brand\">Truck Inspection App</div>
+              <nav class=\"nav-links\">{nav}</nav>
+            </header>
+            <main class=\"content\">
+              <!--FLASH-->
+              {content}
+            </main>
+            <footer class=\"footer\"><small>&copy; 2024 Park Ranger Tools</small></footer>
+          </body>
+        </html>
+        """
+        return Response(body=body)
+
+    def _redirect(self, location: str) -> Response:
+        response = Response(status=HTTPStatus.SEE_OTHER)
+        response.add_header("Location", location)
+        response.body = f"<html><body>Redirecting to <a href=\"{html.escape(location)}\">{html.escape(location)}</a></body></html>"
+        return response
+
+    def _not_found(self) -> Response:
+        body = "<html><body><h1>404 Not Found</h1></body></html>"
+        return Response(status=HTTPStatus.NOT_FOUND, headers=[("Content-Type", "text/html; charset=utf-8")], body=body)
+
+    def _serve_static(self, filename: str) -> Response:
+        static_root = self.static_dir.resolve()
+        path = (self.static_dir / filename).resolve()
+        try:
+            path.relative_to(static_root)
+        except ValueError:
+            return self._not_found()
+        if not path.exists() or not path.is_file():
+            return self._not_found()
+        content_type, encoding = mimetypes.guess_type(str(path))
+        content_type = content_type or "application/octet-stream"
+        if content_type.startswith("text/"):
+            body = path.read_text(encoding="utf-8")
+            return Response(headers=[("Content-Type", f"{content_type}; charset=utf-8")], body=body)
+        data = path.read_bytes()
+        response = Response(headers=[("Content-Type", content_type)], body=data)
+        if encoding:
+            response.add_header("Content-Encoding", encoding)
+        return response
+
+    def _serve_upload(self, filename: str) -> Response:
+        safe_name = Path(filename).name
+        path = self.upload_dir / safe_name
+        if not path.exists() or not path.is_file():
+            return self._not_found()
+        content_type, _ = mimetypes.guess_type(str(path))
+        content_type = content_type or "application/octet-stream"
+        return Response(headers=[("Content-Type", content_type)], body=path.read_bytes())
+
+    # Rendering helpers ----------------------------------------------------------
+    def _nav_links(self, user: Optional[User]) -> str:
+        links: list[str] = []
+        if user:
+            links.append('<a href="/">Home</a>')
+            links.append('<a href="/inspections">Inspections</a>')
+            if user.role == UserRole.SUPERVISOR:
+                links.append('<a href="/dashboard">Dashboard</a>')
+            links.append('<a href="/logout">Sign out</a>')
+        else:
+            links.append('<a href="/login">Sign in</a>')
+        return "".join(links)
+
+    def _render_messages(self, messages: Iterable[tuple[str, str]]) -> str:
+        items = [f'<li class="flash {html.escape(cat)}">{html.escape(msg)}</li>' for cat, msg in messages]
+        if not items:
+            return ""
+        return '<ul class="flash-messages">' + "".join(items) + "</ul>"
+
+    def _render_login(self) -> str:
+        return """
+        <section class=\"card narrow\">
+          <h1>Sign in</h1>
+          <form method=\"post\" class=\"form\">
+            <label for=\"email\">Email</label>
+            <input type=\"email\" id=\"email\" name=\"email\" required autofocus />
+            <label for=\"password\">Password</label>
+            <input type=\"password\" id=\"password\" name=\"password\" required />
+            <button type=\"submit\">Sign in</button>
+          </form>
+          <p class=\"hint\">Use the seeded accounts described in the README.</p>
+        </section>
+        """
+
+    def _render_home(self, user: User, trucks: list[Truck], inspections: list[dict[str, Any]]) -> str:
+        truck_cards = "".join(
+            f"""
+            <article class=\"card\">
+              <h2>{html.escape(truck.identifier)}</h2>
+              <p class=\"muted\">{html.escape(truck.description or 'No description')}</p>
+              <div class=\"actions\">
+                <a class=\"button\" href=\"/trucks/{truck.id}/inspect/quick\">Quick report</a>
+                <a class=\"button secondary\" href=\"/trucks/{truck.id}/inspect/detailed\">Detailed report</a>
+              </div>
+            </article>
+            """
+            for truck in trucks
+        ) or "<p class=\"muted\">No trucks available.</p>"
+        inspections_html = self._render_inspection_table("Your recent inspections", inspections)
+        return f"""
+        <section class=\"card\">
+          <h1>Welcome, {html.escape(user.name)}!</h1>
+          <p>Select a truck to begin a quick or detailed inspection.</p>
+          <div class=\"grid\">{truck_cards}</div>
+        </section>
+        {inspections_html}
+        """
+
+    def _render_inspection_table(self, heading: str, inspections: list[dict[str, Any]]) -> str:
+        if not inspections:
+            return f"<section class=\"card\"><h2>{html.escape(heading)}</h2><p class=\"muted\">No inspections recorded yet.</p></section>"
+        rows = []
+        for item in inspections:
+            inspection = item["inspection"]
+            truck = item["truck"]
+            ranger = item["ranger"]
+            escalated = (
+                "<span class=\"badge badge-alert\">Escalated</span>"
+                if inspection.escalate_visibility
+                else "<span class=\"badge\">Normal</span>"
+            )
+
+            rows.append(
+                """
+                <tr>
+                  <td>{id}</td>
+                  <td class=\"muted\">{type}</td>
+                  <td>{truck}</td>
+                  <td>{ranger}</td>
+                  <td>{created}</td>
+                  <td>{escalated}</td>
+                  <td><a href=\"/inspections/{id}\">View</a></td>
+                </tr>
+                """.format(
+                    id=inspection.id,
+                    type=html.escape(inspection.inspection_type.value.title()),
+                    truck=html.escape(truck.identifier),
+                    ranger=html.escape(ranger.name),
+                    created=inspection.created_at.strftime("%Y-%m-%d %H:%M"),
+                    escalated=escalated,
+
+                )
+            )
+        return f"""
+        <section class=\"card\">
+          <h2>{html.escape(heading)}</h2>
+          <table class=\"inspection-table\">
+            <thead><tr><th>ID</th><th>Type</th><th>Truck</th><th>Ranger</th><th>Created</th><th>Escalated</th><th></th></tr></thead>
+            <tbody>{''.join(rows)}</tbody>
+          </table>
+        </section>
+        """
+
+    def _render_inspection_form(self, truck: Truck, inspection_type: InspectionType, fields: Iterable[Any]) -> str:
+        field_html: list[str] = []
+        for field in fields:
+            label = html.escape(field.label)
+            if field.field_type is FieldType.BOOLEAN:
+                field_html.append(
+                    f"""
+                    <div class=\"form-field\">
+                      <label>{label}</label>
+                      <div class=\"radio-group\">
+                        <label><input type=\"radio\" name=\"{field.id}\" value=\"yes\" required /> Yes</label>
+                        <label><input type=\"radio\" name=\"{field.id}\" value=\"no\" required /> No</label>
+                      </div>
+                    </div>
+                    """
+                )
+            elif field.field_type is FieldType.TEXT:
+                if field.id == "fuel_level":
+                    field_html.append(
+                        f"""
+                        <div class=\"form-field fuel-field\">
+                          <label>{label}</label>
+                          <div class=\"fuel-gauge\" data-fuel-gauge>
+                            <div class=\"gauge-dial\">
+                              <div class=\"gauge-needle\"></div>
+                              <div class=\"gauge-center\"></div>
+                              <div class=\"gauge-labels\"><span>E</span><span>1/2</span><span>F</span></div>
+                            </div>
+                            <input type=\"range\" min=\"0\" max=\"100\" step=\"5\" value=\"50\" data-fuel-slider />
+                          </div>
+                          <div class=\"fuel-reading\"><span data-fuel-value>50%</span></div>
+                          <input type=\"hidden\" id=\"{field.id}\" name=\"{field.id}\" value=\"50\" required />
+                        </div>
+                        """
+                    )
+                else:
+                    required = " required" if field.required else ""
+                    field_html.append(
+                        f"""
+                        <div class=\"form-field\">
+                          <label for=\"{field.id}\">{label}</label>
+                          <textarea id=\"{field.id}\" name=\"{field.id}\"{required}></textarea>
+                        </div>
+                        """
+                    )
+            elif field.field_type is FieldType.NUMBER:
+                required = " required" if field.required else ""
+                field_html.append(
+                    f"""
+                    <div class=\"form-field\">
+                      <label for=\"{field.id}\">{label}</label>
+                      <input type=\"number\" id=\"{field.id}\" name=\"{field.id}\"{required} />
+                    </div>
+                    """
+                )
+        return f"""
+        <section class=\"card\">
+          <h1>{inspection_type.value.title()} inspection for {html.escape(truck.identifier)}</h1>
+          <form method=\"post\" class=\"form\" enctype=\"multipart/form-data\">
+            {''.join(field_html)}
+            <div class=\"form-field\">
+              <label for=\"photos\">Vehicle photos <span class=\"muted\">(Capture or upload 4-10 images)</span></label>
+              <input type=\"file\" id=\"photos\" name=\"photos\" accept=\"image/*\" capture=\"environment\" multiple required />
+            </div>
+            <div class=\"form-field escalate-field\">
+              <input type=\"hidden\" name=\"escalate_visibility\" id=\"escalate_visibility\" value=\"0\" />
+              <button type=\"button\" class=\"escalate-button\" data-escalate-toggle data-target=\"escalate_visibility\" aria-pressed=\"false\">
+                Escalate to supervisors
+              </button>
+              <p class=\"muted small\">Use when immediate supervisor attention is required.</p>
+            </div>
+            <button type=\"submit\" class=\"primary-action\">Submit inspection</button>
+
+          </form>
+        </section>
+        """
+
+    def _render_inspection_detail(self, user: User, view: dict[str, Any]) -> str:
+        inspection: Inspection = view["inspection"]
+        truck: Truck = view["truck"]
+        ranger: User = view["ranger"]
+        fields = view["fields"]
+        notes = view["notes"]
+        response_items = []
+        for field in fields:
+            if field.id in inspection.responses:
+                value = inspection.responses[field.id]
+                if field.field_type is FieldType.BOOLEAN:
+                    display = "Yes" if value else "No"
+                elif field.id == "fuel_level":
+                    display = f"{html.escape(str(value))}%"
+
+                else:
+                    display = html.escape(str(value))
+                response_items.append(f"<li><strong>{html.escape(field.label)}:</strong> {display}</li>")
+        note_items = []
+        for entry in notes:
+            note = entry["note"]
+            author = entry["author"]
+            note_items.append(
+                f"""
+                <li>
+                  <div class=\"note-header\"><strong>{html.escape(author.name)}</strong><span class=\"muted\">{note.created_at.strftime('%Y-%m-%d %H:%M')}</span></div>
+                  <p>{html.escape(note.content)}</p>
+                </li>
+                """
+            )
+        photos = "".join(
+            f"<li><img src=\"{html.escape(url)}\" alt=\"Vehicle photo {index + 1}\" loading=\"lazy\" /></li>"
+            for index, url in enumerate(inspection.photo_urls)
+
+        )
+        note_form = f"""
+        <form method=\"post\" action=\"/inspections/{inspection.id}/notes\" class=\"form\">
+          <label for=\"note-content\">Add a note</label>
+          <textarea id=\"note-content\" name=\"content\" required></textarea>
+          <button type=\"submit\">Add note</button>
+        </form>
+        """
+        if user.role == UserRole.RANGER and inspection.ranger_id != user.id:
+            note_form = ""
+        notes_html = '<ul class="notes">' + ''.join(note_items) + '</ul>' if note_items else '<p class="muted">No notes yet.</p>'
+
+        return f"""
+        <section class=\"card\">
+          <h1>Inspection {inspection.id}</h1>
+          <dl class=\"meta\">
+            <div><dt>Type</dt><dd>{html.escape(inspection.inspection_type.value.title())}</dd></div>
+            <div><dt>Truck</dt><dd>{html.escape(truck.identifier)}</dd></div>
+            <div><dt>Ranger</dt><dd>{html.escape(ranger.name)}</dd></div>
+            <div><dt>Created</dt><dd>{inspection.created_at.strftime('%Y-%m-%d %H:%M')}</dd></div>
+            <div><dt>Escalated</dt><dd>{'Yes' if inspection.escalate_visibility else 'No'}</dd></div>
+          </dl>
+          <h2>Checklist responses</h2>
+          <ul class=\"responses\">{''.join(response_items)}</ul>
+          <h2>Photos</h2>
+          <ul class=\"photo-list\">{photos}</ul>
+
+        </section>
+        <section class=\"card\">
+          <h2>Notes</h2>
+          {notes_html}
+          {note_form}
+        </section>
+        """
+
+    def _render_dashboard(self, metrics: dict[str, Any], inspections: list[dict[str, Any]]) -> str:
+        ranger_rows = []
+        for entry in metrics["ranger_metrics"]:
+            recent = entry["most_recent_inspection"]
+            recent_text = recent.strftime("%Y-%m-%d %H:%M") if recent else "<span class=\"muted\">No inspections</span>"
+            ranger_rows.append(
+                f"<tr><td>{html.escape(entry['ranger'].name)}</td><td>{entry['inspections_completed']}</td><td>{recent_text}</td></tr>"
+            )
+        ranger_table = """
+        <table class=\"inspection-table\">
+          <thead><tr><th>Ranger</th><th>Completed</th><th>Most recent</th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+        """.format(rows="".join(ranger_rows))
+        inspection_table = self._render_inspection_table("All inspections", inspections)
+        return f"""
+        <section class=\"card\">
+          <h1>Supervisor dashboard</h1>
+          <div class=\"metrics\">
+            <div class=\"metric\"><span class=\"label\">Total inspections</span><span class=\"value\">{metrics['total_inspections']}</span></div>
+            <div class=\"metric\"><span class=\"label\">Escalated</span><span class=\"value\">{metrics['escalated_inspections']}</span></div>
+          </div>
+          <h2>Ranger compliance</h2>
+          {ranger_table}
+        </section>
+        {inspection_table}
+        """
+
+    # Data helpers ---------------------------------------------------------------
+    def _collect_responses(self, request: Request, inspection_type: InspectionType) -> dict[str, Any]:
+        responses: dict[str, Any] = {}
+        for field in get_form_definition(inspection_type):
+            raw = request.form_value(field.id)
+            if raw is None:
+                if field.required:
+                    raise ValueError(f"Please provide '{field.label}'.")
+                continue
+            if field.field_type is FieldType.BOOLEAN:
+                if raw not in {"yes", "no"}:
+                    raise ValueError(f"Invalid selection for '{field.label}'.")
+                responses[field.id] = raw == "yes"
+            elif field.field_type is FieldType.TEXT:
+                cleaned = raw.strip()
+                if field.id == "fuel_level":
+                    if not cleaned or not cleaned.isdigit():
+                        raise ValueError("Please set the fuel gauge before submitting.")
+                    value = int(cleaned)
+                    if value < 0 or value > 100:
+                        raise ValueError("Fuel level must be between 0 and 100.")
+                    responses[field.id] = str(value)
+                else:
+                    if field.required and not cleaned:
+                        raise ValueError(f"Please provide '{field.label}'.")
+                    responses[field.id] = cleaned
+            elif field.field_type is FieldType.NUMBER:
+                cleaned = raw.strip()
+                if not cleaned.isdigit():
+                    raise ValueError(f"'{field.label}' must be a number.")
+                responses[field.id] = int(cleaned)
+        return responses
+
+    def _collect_photos(self, request: Request) -> list[str]:
+        uploads = request.file_values("photos")
+        if len(uploads) < 4 or len(uploads) > 10:
+            raise ValueError("Please provide between 4 and 10 photos.")
+        return self._store_uploaded_photos(uploads)
+
+    def _store_uploaded_photos(self, uploads: Iterable[UploadedFile]) -> list[str]:
+        saved: list[str] = []
+        for upload in uploads:
+            if not upload.content_type.startswith("image/"):
+                raise ValueError("All uploads must be image files.")
+            suffix = Path(upload.filename).suffix or ".jpg"
+            filename = f"{uuid.uuid4().hex}{suffix}"
+            path = self.upload_dir / filename
+            path.write_bytes(upload.data)
+            saved.append(f"/uploads/{filename}")
+        return saved
+
+
+    def _build_inspection_view(self, inspection: Inspection, include_notes: bool = False) -> dict[str, Any]:
+        truck = self.service.get_truck(inspection.truck_id)
+        ranger = self.service.database.get_user(inspection.ranger_id)
+        result = {"inspection": inspection, "truck": truck, "ranger": ranger, "fields": get_form_definition(inspection.inspection_type)}
+        if include_notes:
+            notes = []
+            for note in self.service.list_notes(inspection.id):
+                author = self.service.database.get_user(note.author_id)
+                if author:
+                    notes.append({"note": note, "author": author})
+            result["notes"] = notes
+        else:
+            result["notes"] = []
+        return result
+
+
+def create_app(database_path: Optional[Path | str] = None) -> TruckInspectionWebApp:
+    path = Path(database_path) if database_path else Path("truck_inspections.db")
+    return TruckInspectionWebApp(path)
+
+
+app = create_app()
+
+
+if __name__ == "__main__":  # pragma: no cover - manual execution helper
+    app.run()
