@@ -225,12 +225,15 @@ class TruckInspectionWebApp:
         user = self._current_user(request)
         if not user:
             return self._redirect("/login")
-        if user.role == UserRole.SUPERVISOR:
-            return self._redirect("/dashboard")
         trucks = self.service.list_trucks()
-        inspections = [self._build_inspection_view(insp) for insp in self.service.list_inspections(requester=user)]
+        ranger_filter = user if user.role == UserRole.SUPERVISOR else None
+        inspections = [
+            self._build_inspection_view(insp)
+            for insp in self.service.list_inspections(requester=user, ranger=ranger_filter)
+        ]
         content = self._render_home(user, trucks, inspections)
-        return self._page("Ranger Home", user, content)
+        page_title = "Ranger Home" if user.role == UserRole.RANGER else "Home"
+        return self._page(page_title, user, content)
 
     def _login_get(self, request: Request) -> Response:
         return self._page("Sign in", None, self._render_login())

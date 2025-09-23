@@ -152,3 +152,49 @@ def test_supervisor_dashboard(client: FrontendClient):
     response = client.request("GET", "/dashboard")
     assert response.status == HTTPStatus.OK
     assert "Supervisor dashboard" in response.body
+
+
+def test_supervisor_can_submit_inspection(app, client: FrontendClient):
+    response = login(client, "sam.supervisor@example.com", "supervisorpass")
+    assert "Quick report" in response.body
+
+    service = app.service
+    user = service.database.get_user_by_email("sam.supervisor@example.com")
+    assert user is not None
+    truck = service.list_trucks()[0]
+
+    form_definition = get_form_definition(InspectionType.QUICK)
+    form_data: dict[str, str] = {}
+    for field in form_definition:
+        if field.field_type is FieldType.BOOLEAN:
+            form_data[field.id] = "yes"
+        elif field.field_type is FieldType.TEXT:
+            if field.id == "fuel_level":
+                form_data[field.id] = "80"
+            else:
+                form_data[field.id] = "Supervisor check"
+        elif field.field_type is FieldType.NUMBER:
+            form_data[field.id] = "456"
+    form_data["escalate_visibility"] = "0"
+
+    files = {
+        "photos": [
+            (f"photo-{index}.jpg", b"binarydata", "image/jpeg")
+            for index in range(1, 5)
+        ]
+    }
+
+    response = client.request(
+        "POST",
+        f"/trucks/{truck.id}/inspect/{InspectionType.QUICK.value}",
+        data=form_data,
+        files=files,
+        follow_redirects=True,
+    )
+    assert "Inspection submitted successfully" in response.body
+
+    inspections = service.list_inspections(requester=user, ranger=user)
+    assert inspections
+    latest = inspections[-1]
+    assert latest.truck_id == truck.id
+    assert latest.inspection_type is InspectionType.QUICK
