@@ -1,0 +1,18 @@
+[project]
+name = "park-ranger-tools"
+version = "0.1.0"
+description = "Truck inspection app backend"
+requires-python = ">=3.11"
+authors = [
+  { name = "Park Ranger Tools" }
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2.0"
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
