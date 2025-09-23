@@ -13,6 +13,7 @@ from .models import (
     InspectionType,
     SessionToken,
     Truck,
+    TruckAssignment,
     User,
     UserRole,
 )
@@ -72,8 +73,22 @@ class Database:
                     created_at TEXT NOT NULL,
                     expires_at TEXT NOT NULL
                 );
-                """
-            )
+                CREATE TABLE IF NOT EXISTS truck_assignments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    truck_id INTEGER NOT NULL REFERENCES trucks(id),
+                    ranger_id INTEGER NOT NULL REFERENCES users(id),
+                    start_inspection_id INTEGER NOT NULL REFERENCES inspections(id),
+                    end_inspection_id INTEGER REFERENCES inspections(id),
+                    start_miles INTEGER NOT NULL,
+                    end_miles INTEGER,
+                    checked_out_at TEXT NOT NULL,
+                    returned_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_truck_assignments_active
+                    ON truck_assignments(truck_id)
+                    WHERE returned_at IS NULL;
+            """
+        )
 
     @contextmanager
     def _connect(self) -> Generator[sqlite3.Connection, None, None]:
@@ -274,6 +289,80 @@ class Database:
         with self.session() as conn:
             conn.execute("DELETE FROM session_tokens WHERE expires_at < ?", (_format_datetime(now),))
 
+    # Assignment operations
+    def add_assignment(
+        self,
+        *,
+        truck_id: int,
+        ranger_id: int,
+        start_inspection_id: int,
+        start_miles: int,
+    ) -> TruckAssignment:
+        now = _utcnow()
+        with self.session() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO truck_assignments (
+                    truck_id, ranger_id, start_inspection_id, start_miles, checked_out_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (truck_id, ranger_id, start_inspection_id, start_miles, _format_datetime(now)),
+            )
+            assignment_id = cursor.lastrowid
+        assignment = self.get_assignment(assignment_id)
+        assert assignment is not None
+        return assignment
+
+    def close_assignment(
+        self,
+        assignment_id: int,
+        *,
+        end_inspection_id: int,
+        end_miles: int,
+    ) -> TruckAssignment:
+        returned_at = _utcnow()
+        with self.session() as conn:
+            conn.execute(
+                """
+                UPDATE truck_assignments
+                SET end_inspection_id = ?, end_miles = ?, returned_at = ?
+                WHERE id = ?
+                """,
+                (end_inspection_id, end_miles, _format_datetime(returned_at), assignment_id),
+            )
+        assignment = self.get_assignment(assignment_id)
+        assert assignment is not None
+        return assignment
+
+    def get_assignment(self, assignment_id: int) -> Optional[TruckAssignment]:
+        with self.session() as conn:
+            row = conn.execute("SELECT * FROM truck_assignments WHERE id = ?", (assignment_id,)).fetchone()
+        return _row_to_assignment(row) if row else None
+
+    def get_active_assignment_for_truck(self, truck_id: int) -> Optional[TruckAssignment]:
+        with self.session() as conn:
+            row = conn.execute(
+                "SELECT * FROM truck_assignments WHERE truck_id = ? AND returned_at IS NULL",
+                (truck_id,),
+            ).fetchone()
+        return _row_to_assignment(row) if row else None
+
+    def get_active_assignment_for_ranger(self, ranger_id: int) -> Optional[TruckAssignment]:
+        with self.session() as conn:
+            row = conn.execute(
+                "SELECT * FROM truck_assignments WHERE ranger_id = ? AND returned_at IS NULL",
+                (ranger_id,),
+            ).fetchone()
+        return _row_to_assignment(row) if row else None
+
+    def list_active_assignments(self) -> Iterable[TruckAssignment]:
+        with self.session() as conn:
+            rows = conn.execute(
+                "SELECT * FROM truck_assignments WHERE returned_at IS NULL",
+            ).fetchall()
+        for row in rows:
+            yield _row_to_assignment(row)
+
 
 def _row_to_user(row: sqlite3.Row) -> User:
     return User(
@@ -327,6 +416,20 @@ def _row_to_session_token(row: sqlite3.Row) -> SessionToken:
         token=row["token"],
         created_at=_parse_datetime(row["created_at"]),
         expires_at=_parse_datetime(row["expires_at"]),
+    )
+
+
+def _row_to_assignment(row: sqlite3.Row) -> TruckAssignment:
+    return TruckAssignment(
+        id=row["id"],
+        truck_id=row["truck_id"],
+        ranger_id=row["ranger_id"],
+        start_inspection_id=row["start_inspection_id"],
+        end_inspection_id=row["end_inspection_id"],
+        start_miles=row["start_miles"],
+        end_miles=row["end_miles"],
+        checked_out_at=_parse_datetime(row["checked_out_at"]),
+        returned_at=_parse_datetime(row["returned_at"]) if row["returned_at"] else None,
     )
 
 

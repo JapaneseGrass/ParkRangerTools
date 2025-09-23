@@ -32,6 +32,7 @@ class Truck:
 class InspectionType(str, Enum):
     QUICK = "quick"
     DETAILED = "detailed"
+    RETURN = "return"
 
 @dataclass
 class Inspection:
@@ -63,3 +64,16 @@ class SessionToken:
     token: str
     created_at: datetime
     expires_at: datetime
+
+
+@dataclass
+class TruckAssignment:
+    id: int
+    truck_id: int
+    ranger_id: int
+    start_inspection_id: int
+    end_inspection_id: Optional[int]
+    start_miles: int
+    end_miles: Optional[int]
+    checked_out_at: datetime
+    returned_at: Optional[datetime]

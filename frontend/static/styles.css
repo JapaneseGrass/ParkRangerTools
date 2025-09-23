@@ -98,6 +98,11 @@ body.photo-viewer-open {
   align-items: flex-start;
 }
 
+.truck-card--assignment {
+  border: 1px solid rgba(47, 107, 60, 0.2);
+  background: rgba(47, 107, 60, 0.08);
+}
+
 .truck-card__graphic {
   width: 100%;
   border-radius: 14px;

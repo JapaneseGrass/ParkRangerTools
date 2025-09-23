@@ -206,3 +206,44 @@ def test_seeded_truck_identifiers(seeded_app: TruckInspectionApp) -> None:
         "T2",
         "T3",
     }
+
+
+def test_checkout_and_return_flow(seeded_app: TruckInspectionApp, ranger: User, truck) -> None:
+    start_inspection = seeded_app.submit_inspection(
+        user=ranger,
+        truck=truck,
+        inspection_type=InspectionType.QUICK,
+        responses={
+            "exterior_clean": True,
+            "interior_clean": True,
+            "seatbelts_functioning": True,
+            "tire_inflation": True,
+            "fuel_level": "80",
+            "odometer_miles": 1000,
+        },
+        photo_urls=["start1.jpg", "start2.jpg", "start3.jpg", "start4.jpg"],
+    )
+
+    assignment = seeded_app.checkout_truck(ranger=ranger, truck=truck, inspection=start_inspection)
+    assert assignment.start_miles == 1000
+
+    available_ids = {t.id for t in seeded_app.list_available_trucks()}
+    assert truck.id not in available_ids
+
+    end_inspection = seeded_app.submit_inspection(
+        user=ranger,
+        truck=truck,
+        inspection_type=InspectionType.RETURN,
+        responses={
+            "odometer_miles": 1012,
+            "return_notes": "All clear",
+        },
+        photo_urls=[],
+    )
+
+    completed = seeded_app.return_truck(assignment_id=assignment.id, ranger=ranger, inspection=end_inspection)
+    assert completed.end_miles == 1012
+    assert completed.returned_at is not None
+
+    available_ids = {t.id for t in seeded_app.list_available_trucks()}
+    assert truck.id in available_ids

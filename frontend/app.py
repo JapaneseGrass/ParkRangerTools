@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, urlparse
 
 from backend.app.app import TruckInspectionApp
 from backend.app.forms import FieldType, get_form_definition
-from backend.app.models import Inspection, InspectionType, Truck, User, UserRole
+from backend.app.models import Inspection, InspectionType, Truck, TruckAssignment, User, UserRole
 
 
 TRUCK_CATEGORY_MAP: dict[str, str] = {
@@ -303,13 +303,20 @@ class TruckInspectionWebApp:
         user = self._current_user(request)
         if not user:
             return self._redirect("/login")
-        trucks = self.service.list_trucks()
         ranger_filter = user if user.role == UserRole.SUPERVISOR else None
         inspections = [
             self._build_inspection_view(insp)
             for insp in self.service.list_inspections(requester=user, ranger=ranger_filter)
         ]
-        content = self._render_home(user, trucks, inspections)
+        if user.role == UserRole.SUPERVISOR:
+            trucks = self.service.list_trucks()
+            active_assignments = {assignment.truck_id: assignment for assignment in self.service.list_active_assignments()}
+            content = self._render_supervisor_home(user, trucks, active_assignments, inspections)
+        else:
+            assignment = self.service.get_active_assignment_for_ranger(user)
+            assignment_truck = self.service.get_truck(assignment.truck_id) if assignment else None
+            available_trucks = self.service.list_available_trucks()
+            content = self._render_ranger_home(user, available_trucks, assignment, assignment_truck, inspections)
         page_title = "Ranger Home" if user.role == UserRole.RANGER else "Home"
         return self._page(page_title, user, content)
 
@@ -348,13 +355,78 @@ class TruckInspectionWebApp:
             inspection_enum = InspectionType(inspection_type)
         except ValueError:
             return self._not_found()
-        fields = get_form_definition(inspection_enum)
         preserved = self._preserve_form_state(request)
+        action = request.query.get("action", [None])[0]
+        if request.method == "POST":
+            action = request.form_value("action") or action
+        action = action or "checkout"
+        if action not in {"checkout", "return"}:
+            action = "checkout"
+
+        assignment_obj: Optional[TruckAssignment] = None
+        assignment_param = request.query.get("assignment", [None])[0]
+        if request.method == "POST":
+            assignment_param = request.form_value("assignment_id") or assignment_param
+        assignment_id: Optional[int]
+        if assignment_param:
+            try:
+                assignment_id = int(assignment_param)
+            except ValueError:
+                assignment_id = None
+            else:
+                assignment_obj = self.service.database.get_assignment(assignment_id)
+                if not assignment_obj:
+                    assignment_id = None
+                    assignment_obj = None
+        else:
+            assignment_id = None
+            assignment_obj = None
+
+        if action == "return" and not assignment_obj:
+            assignment_obj = self.service.get_active_assignment_for_ranger(user)
+            if assignment_obj and assignment_obj.truck_id != truck.id:
+                assignment_obj = None
+            if assignment_obj:
+                assignment_id = assignment_obj.id
+
+        if action == "return":
+            inspection_enum = InspectionType.RETURN
+
+        fields = get_form_definition(inspection_enum)
+
+        active_assignment_for_truck = self.service.get_active_assignment_for_truck(truck)
+        ranger_assignment = self.service.get_active_assignment_for_ranger(user) if user.role == UserRole.RANGER else None
+        if action == "checkout" and ranger_assignment and ranger_assignment.truck_id != truck.id:
+            self._flash(request, "error", "You already have a vehicle checked out. Please return it before checking out another truck.")
+            return self._redirect("/")
+
+        if action == "checkout" and active_assignment_for_truck:
+            if active_assignment_for_truck.ranger_id == user.id:
+                self._flash(request, "info", "You already have this truck checked out. Please return it before starting another inspection.")
+            else:
+                self._flash(request, "error", "This truck is currently checked out by another ranger.")
+            return self._redirect("/")
+        if action == "return":
+            if not assignment_obj:
+                self._flash(request, "error", "No active checkout found for this truck.")
+                return self._redirect("/")
+            if assignment_obj.ranger_id != user.id and user.role != UserRole.SUPERVISOR:
+                self._flash(request, "error", "You cannot return a truck you did not check out.")
+                return self._redirect("/")
+
         if request.method == "POST":
             try:
                 responses = self._collect_responses(request, inspection_enum)
-                photos = self._collect_photos(request)
+                if inspection_enum is InspectionType.RETURN:
+                    photos = []
+                else:
+                    photos = self._collect_photos(request)
                 escalate = request.form_value("escalate_visibility") == "1"
+                miles_value = responses.get("odometer_miles")
+                if not isinstance(miles_value, int):
+                    raise ValueError("Mileage must be provided as a number.")
+                if action == "return" and assignment_obj and miles_value < assignment_obj.start_miles:
+                    raise ValueError("Ending mileage must be greater than or equal to the starting mileage.")
                 inspection = self.service.submit_inspection(
                     user=user,
                     truck=truck,
@@ -363,12 +435,25 @@ class TruckInspectionWebApp:
                     photo_urls=photos,
                     escalate_visibility=escalate,
                 )
-                self._flash(request, "success", "Inspection submitted successfully.")
+                if action == "checkout":
+                    self.service.checkout_truck(ranger=user, truck=truck, inspection=inspection)
+                    self._flash(request, "success", "Truck checked out successfully.")
+                else:
+                    assert assignment_id is not None
+                    self.service.return_truck(assignment_id=assignment_id, ranger=user, inspection=inspection)
+                    self._flash(request, "success", "Truck returned successfully.")
                 return self._redirect(f"/inspections/{inspection.id}")
             except ValueError as exc:
                 self._flash(request, "error", str(exc))
                 preserved = self._preserve_form_state(request)
-        content = self._render_inspection_form(truck, inspection_enum, fields, preserved)
+        content = self._render_inspection_form(
+            truck,
+            inspection_enum,
+            fields,
+            action,
+            assignment_id,
+            preserved,
+        )
         return self._page(f"{inspection_enum.value.title()} inspection", user, content)
 
     def _inspection_list(self, request: Request) -> Response:
@@ -522,37 +607,111 @@ class TruckInspectionWebApp:
         </section>
         """
 
-    def _render_home(self, user: User, trucks: list[Truck], inspections: list[dict[str, Any]]) -> str:
-        truck_cards = "".join(self._render_truck_card(truck) for truck in trucks)
-        if not truck_cards:
-            truck_cards = "<p class=\"muted\">No trucks available.</p>"
+    def _render_ranger_home(
+        self,
+        user: User,
+        available_trucks: list[Truck],
+        assignment: Optional[TruckAssignment],
+        assignment_truck: Optional[Truck],
+        inspections: list[dict[str, Any]],
+    ) -> str:
+        available_cards = "".join(self._render_available_truck_card(truck) for truck in available_trucks)
+        if not available_cards:
+            available_cards = "<p class=\"muted\">No trucks available right now.</p>"
+
+        assignment_html = ""
+        if assignment and assignment_truck:
+            assignment_html = self._render_assignment_card(assignment_truck, assignment)
+
         inspections_html = self._render_inspection_table("Your recent inspections", inspections)
         return f"""
         <section class=\"card\">
           <h1>Welcome, {html.escape(user.name)}!</h1>
-          <p>Select a truck to begin a quick or detailed inspection.</p>
-          <div class=\"grid\">{truck_cards}</div>
+          <p>Select an available truck to check out or return your current vehicle.</p>
+          {assignment_html}
+          <div class=\"grid\">{available_cards}</div>
         </section>
         {inspections_html}
         """
 
-    def _render_truck_card(self, truck: Truck) -> str:
+    def _render_supervisor_home(
+        self,
+        user: User,
+        trucks: list[Truck],
+        active_assignments: dict[int, TruckAssignment],
+        inspections: list[dict[str, Any]],
+    ) -> str:
+        cards = "".join(self._render_supervisor_truck_card(truck, active_assignments.get(truck.id)) for truck in trucks)
+        if not cards:
+            cards = "<p class=\"muted\">No trucks configured.</p>"
+        inspections_html = self._render_inspection_table("All inspections", inspections)
+        return f"""
+        <section class=\"card\">
+          <h1>Fleet overview</h1>
+          <div class=\"grid\">{cards}</div>
+        </section>
+        {inspections_html}
+        """
+
+    def _render_available_truck_card(self, truck: Truck) -> str:
         profile = self._truck_profile(truck)
-        badge_class = profile["badge_class"]
-        graphic_class = f"truck-card__graphic truck-card__graphic--{badge_class}"
+        graphic_class = f"truck-card__graphic truck-card__graphic--{profile['badge_class']}"
         icon_html = profile["icon"]
-        return (
-            f"""
-            <article class=\"card truck-card\">
-              <div class=\"{graphic_class}\">{icon_html}</div>
-              <h2>{html.escape(truck.identifier)}</h2>
-              <div class=\"actions\">
-                <a class=\"button\" href=\"/trucks/{truck.id}/inspect/quick\">Quick report</a>
-                <a class=\"button secondary\" href=\"/trucks/{truck.id}/inspect/detailed\">Detailed report</a>
-              </div>
-            </article>
-            """
-        )
+        quick_url = f"/trucks/{truck.id}/inspect/{InspectionType.QUICK.value}?action=checkout"
+        detailed_url = f"/trucks/{truck.id}/inspect/{InspectionType.DETAILED.value}?action=checkout"
+        return f"""
+        <article class=\"card truck-card\">
+          <div class=\"{graphic_class}\">{icon_html}</div>
+          <h2>{html.escape(truck.identifier)}</h2>
+          <div class=\"actions\">
+            <a class=\"button\" href=\"{quick_url}\">Check out (Quick)</a>
+            <a class=\"button secondary\" href=\"{detailed_url}\">Check out (Detailed)</a>
+          </div>
+        </article>
+        """
+
+    def _render_assignment_card(self, truck: Truck, assignment: TruckAssignment) -> str:
+        profile = self._truck_profile(truck)
+        graphic_class = f"truck-card__graphic truck-card__graphic--{profile['badge_class']}"
+        icon_html = profile["icon"]
+        checked_out_at = assignment.checked_out_at.strftime("%Y-%m-%d %H:%M")
+        return_url = f"/trucks/{truck.id}/inspect/{InspectionType.RETURN.value}?action=return&assignment={assignment.id}"
+        return f"""
+        <article class=\"card truck-card truck-card--assignment\">
+          <div class=\"{graphic_class}\">{icon_html}</div>
+          <h2>{html.escape(truck.identifier)} (Checked out)</h2>
+          <p class=\"muted\">Started {checked_out_at} · Start miles: {assignment.start_miles}</p>
+          <div class=\"actions\">
+            <a class=\"button\" href=\"{return_url}\">Return vehicle</a>
+          </div>
+        </article>
+        """
+
+    def _render_supervisor_truck_card(self, truck: Truck, assignment: Optional[TruckAssignment]) -> str:
+        profile = self._truck_profile(truck)
+        graphic_class = f"truck-card__graphic truck-card__graphic--{profile['badge_class']}"
+        icon_html = profile["icon"]
+        actions = []
+        status = "Available"
+        if assignment:
+            status = f"Checked out by ranger #{assignment.ranger_id} since {assignment.checked_out_at.strftime('%Y-%m-%d %H:%M')}"
+            return_url = f"/trucks/{truck.id}/inspect/{InspectionType.RETURN.value}?action=return&assignment={assignment.id}"
+            actions.append(f'<a class="button" href="{return_url}">Return vehicle</a>')
+        else:
+            quick_url = f"/trucks/{truck.id}/inspect/{InspectionType.QUICK.value}?action=checkout"
+            detailed_url = f"/trucks/{truck.id}/inspect/{InspectionType.DETAILED.value}?action=checkout"
+            actions.append(f'<a class="button" href="{quick_url}">Quick inspection</a>')
+            actions.append(f'<a class="button secondary" href="{detailed_url}">Detailed inspection</a>')
+
+        actions_html = ''.join(actions) if actions else ''
+        return f"""
+        <article class=\"card truck-card\">
+          <div class=\"{graphic_class}\">{icon_html}</div>
+          <h2>{html.escape(truck.identifier)}</h2>
+          <p class=\"muted\">{html.escape(status)}</p>
+          <div class=\"actions\">{actions_html}</div>
+        </article>
+        """
 
     def _render_inspection_table(self, heading: str, inspections: list[dict[str, Any]]) -> str:
         if not inspections:
@@ -602,6 +761,8 @@ class TruckInspectionWebApp:
         truck: Truck,
         inspection_type: InspectionType,
         fields: Iterable[Any],
+        action: str,
+        assignment_id: Optional[int],
         preserved: dict[str, Any] | None = None,
     ) -> str:
         preserved = preserved or {}
@@ -671,23 +832,49 @@ class TruckInspectionWebApp:
         escalate_checked = "active" if preserved.get("escalate_visibility") == "1" else ""
         escalate_pressed = "true" if preserved.get("escalate_visibility") == "1" else "false"
         escalate_value = preserved.get("escalate_visibility", "0")
-        return f"""
-        <section class=\"card\">
-          <h1>{inspection_type.value.title()} inspection for {html.escape(truck.identifier)}</h1>
-          <form method=\"post\" class=\"form\" enctype=\"multipart/form-data\">
-            {''.join(field_html)}
-            <input type=\"hidden\" name=\"__preserve__\" value=\"1\" />
+        action_value = html.escape(str(preserved.get("action", action)))
+        assignment_value = preserved.get("assignment_id") or (str(assignment_id) if assignment_id is not None else None)
+        assignment_input = (
+            f'<input type="hidden" name="assignment_id" value="{html.escape(str(assignment_value))}" />'
+            if assignment_value
+            else ""
+        )
+        title_prefix = "Check out" if action_value == "checkout" else "Return"
+        photos_section = ""
+        escalate_section = ""
+        if action_value != "return":
+            photos_section = (
+                """
             <div class=\"form-field\">
               <label for=\"photos\">Vehicle photos <span class=\"muted\">(Capture or upload 4-10 images)</span></label>
               <input type=\"file\" id=\"photos\" name=\"photos\" accept=\"image/*\" capture=\"environment\" multiple required />
             </div>
-            <div class=\"form-field escalate-field\">
-              <input type=\"hidden\" name=\"escalate_visibility\" id=\"escalate_visibility\" value=\"{escalate_value}\" />
-              <button type=\"button\" class=\"escalate-button {escalate_checked}\" data-escalate-toggle data-target=\"escalate_visibility\" aria-pressed=\"{escalate_pressed}\">
-                Escalate to supervisors
-              </button>
-              <p class=\"muted small\">Use when immediate supervisor attention is required.</p>
-            </div>
+                """
+            )
+        else:
+            photos_section = ""
+
+        escalate_section = (
+            f"""
+        <div class=\"form-field escalate-field\">
+          <input type=\"hidden\" name=\"escalate_visibility\" id=\"escalate_visibility\" value=\"{escalate_value}\" />
+          <button type=\"button\" class=\"escalate-button {escalate_checked}\" data-escalate-toggle data-target=\"escalate_visibility\" aria-pressed=\"{escalate_pressed}\">
+            Escalate to supervisors
+          </button>
+          <p class=\"muted small\">Use when immediate supervisor attention is required.</p>
+        </div>
+            """
+        )
+        return f"""
+        <section class=\"card\">
+          <h1>{title_prefix} {inspection_type.value.title()} inspection for {html.escape(truck.identifier)}</h1>
+          <form method=\"post\" class=\"form\" enctype=\"multipart/form-data\">
+            {''.join(field_html)}
+            <input type=\"hidden\" name=\"__preserve__\" value=\"1\" />
+            <input type=\"hidden\" name=\"action\" value=\"{action_value}\" />
+            {assignment_input}
+            {photos_section}
+            {escalate_section}
             <button type=\"submit\" class=\"primary-action\">Submit inspection</button>
           </form>
         </section>

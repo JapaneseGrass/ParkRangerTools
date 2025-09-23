@@ -7,7 +7,15 @@ from typing import Iterable, List, Optional
 from .auth import AuthService
 from .database import Database
 from .inspections import InspectionService
-from .models import Inspection, InspectionNote, InspectionType, Truck, User, UserRole
+from .models import (
+    Inspection,
+    InspectionNote,
+    InspectionType,
+    Truck,
+    TruckAssignment,
+    User,
+    UserRole,
+)
 
 
 @dataclass
@@ -56,6 +64,20 @@ class TruckInspectionApp:
     # Truck operations
     def list_trucks(self) -> List[Truck]:
         return list(self.database.list_active_trucks())
+
+    def list_available_trucks(self) -> List[Truck]:
+        active_assignments = {assignment.truck_id for assignment in self.database.list_active_assignments()}
+        trucks = list(self.database.list_active_trucks())
+        return [truck for truck in trucks if truck.id not in active_assignments]
+
+    def get_active_assignment_for_truck(self, truck: Truck) -> Optional[TruckAssignment]:
+        return self.database.get_active_assignment_for_truck(truck.id)
+
+    def get_active_assignment_for_ranger(self, ranger: User) -> Optional[TruckAssignment]:
+        return self.database.get_active_assignment_for_ranger(ranger.id)
+
+    def list_active_assignments(self) -> List[TruckAssignment]:
+        return list(self.database.list_active_assignments())
 
     def create_truck(self, *, identifier: str, description: Optional[str], supervisor: User) -> Truck:
         if supervisor.role != UserRole.SUPERVISOR:
@@ -117,6 +139,58 @@ class TruckInspectionApp:
 
     def get_forms(self) -> dict[str, list[dict[str, object]]]:
         return self.inspections.list_forms()
+
+    def checkout_truck(
+        self,
+        *,
+        ranger: User,
+        truck: Truck,
+        inspection: Inspection,
+    ) -> TruckAssignment:
+        if self.database.get_active_assignment_for_truck(truck.id):
+            raise ValueError("Truck is already checked out")
+        start_miles = self._extract_odometer(inspection)
+        return self.database.add_assignment(
+            truck_id=truck.id,
+            ranger_id=ranger.id,
+            start_inspection_id=inspection.id,
+            start_miles=start_miles,
+        )
+
+    def return_truck(
+        self,
+        *,
+        assignment_id: int,
+        ranger: User,
+        inspection: Inspection,
+    ) -> TruckAssignment:
+        assignment = self.database.get_assignment(assignment_id)
+        if not assignment:
+            raise LookupError("Assignment not found")
+        if assignment.returned_at is not None:
+            raise ValueError("Truck has already been returned")
+        if assignment.ranger_id != ranger.id and ranger.role != UserRole.SUPERVISOR:
+            raise PermissionError("You cannot return this truck")
+        if assignment.truck_id != inspection.truck_id:
+            raise ValueError("Inspection does not match the checked out truck")
+        end_miles = self._extract_odometer(inspection)
+        if end_miles < assignment.start_miles:
+            raise ValueError("Ending mileage cannot be less than the starting mileage")
+        return self.database.close_assignment(
+            assignment_id,
+            end_inspection_id=inspection.id,
+            end_miles=end_miles,
+        )
+
+    @staticmethod
+    def _extract_odometer(inspection: Inspection) -> int:
+        miles = inspection.responses.get("odometer_miles")
+        if miles is None:
+            raise ValueError("Inspection must include mileage")
+        try:
+            return int(miles)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid mileage value") from exc
 
 
 if __name__ == "__main__":  # pragma: no cover - manual interaction helper

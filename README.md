@@ -69,6 +69,13 @@ Navigate to http://127.0.0.1:8000/ and sign in with one of the seeded accounts:
 Uploaded photos are saved under `frontend/uploads/`, and the shared
 `truck_inspections.db` file keeps inspection history for both roles.
 
+Rangers now check out a vehicle before taking it into the field. A checkout triggers
+an inspection that records the starting mileage; the vehicle disappears from the
+available list until it is returned. Returning a vehicle requires a second
+inspection to capture ending mileage, ensuring the fleet log always reflects the
+latest odometer values. The return flow is lightweight—only the final mileage is
+required, with optional notes if the ranger wants to flag anything for follow-up.
+
 ### Testing
 
 Run the pytest suite (after installing the optional dev dependencies) to verify

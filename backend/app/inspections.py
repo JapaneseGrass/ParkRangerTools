@@ -47,8 +47,12 @@ class InspectionService:
         if not truck.active:
             raise ValueError("Truck is not active")
         photo_list = list(photo_urls)
-        if len(photo_list) < PHOTO_MIN or len(photo_list) > PHOTO_MAX:
-            raise ValueError("Between 4 and 10 photos are required")
+        if inspection_type is not InspectionType.RETURN:
+            if len(photo_list) < PHOTO_MIN or len(photo_list) > PHOTO_MAX:
+                raise ValueError("Between 4 and 10 photos are required")
+        else:
+            if len(photo_list) > PHOTO_MAX:
+                raise ValueError("At most 10 photos are allowed")
         validated = validate_responses(inspection_type, responses)
         return self.database.add_inspection(
             inspection_type=inspection_type,

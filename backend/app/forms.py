@@ -56,6 +56,10 @@ FORM_DEFINITIONS: dict[InspectionType, tuple[InspectionField, ...]] = {
         InspectionField("mirrors_ok", "Mirrors function and are clean"),
         InspectionField("emergency_system_ok", "Emergency lights and siren work"),
     ),
+    InspectionType.RETURN: (
+        InspectionField("odometer_miles", "Ending miles", FieldType.NUMBER),
+        InspectionField("return_notes", "Return notes", FieldType.TEXT, required=False),
+    ),
 }
 
 
