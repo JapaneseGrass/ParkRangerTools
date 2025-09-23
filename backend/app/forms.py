@@ -14,7 +14,7 @@ class FieldType(str, Enum):
 
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class InspectionField:
     id: str
     label: str

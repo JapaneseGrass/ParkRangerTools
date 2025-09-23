@@ -13,6 +13,7 @@ PHOTO_MAX = 10
 NOTE_WINDOW_HOURS = 24
 
 
+
 @dataclass
 class InspectionService:
     database: Database
@@ -48,7 +49,7 @@ class InspectionService:
             raise ValueError("Truck is not active")
         photo_list = list(photo_urls)
         if len(photo_list) < PHOTO_MIN or len(photo_list) > PHOTO_MAX:
-            raise ValueError("Between 4 and 10 photo URLs are required")
+            raise ValueError("Between 4 and 10 photos are required")
         validated = validate_responses(inspection_type, responses)
         return self.database.add_inspection(
             inspection_type=inspection_type,

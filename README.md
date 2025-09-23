@@ -12,7 +12,7 @@ covers core MVP workflows:
 - Secure authentication tokens.
 - Truck catalog management (supervisor only).
 - Quick and detailed inspection flows with validated checklists.
-- Photo-count enforcement (4–10 per inspection) and optional video links.
+- Photo-count enforcement (4–10 per inspection) with on-device photo capture/upload support and an interactive fuel gauge.
 - Ranger follow-up notes within a 24-hour window.
 - Supervisor dashboard metrics for accountability and escalations.
 

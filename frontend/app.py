@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import html
+import mimetypes
 import secrets
+import uuid
 from dataclasses import dataclass, field
+from email.parser import BytesParser
+from email.policy import default
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from pathlib import Path
@@ -15,6 +19,11 @@ from backend.app.models import Inspection, InspectionType, Truck, User, UserRole
 
 
 @dataclass
+class UploadedFile:
+    filename: str
+    content_type: str
+    data: bytes
+
 class Request:
     method: str
     target: str
@@ -26,10 +35,13 @@ class Request:
         self.path = parsed.path or "/"
         self.query = parse_qs(parsed.query)
         self.form: dict[str, list[str]] = {}
+        self.files: dict[str, list[UploadedFile]] = {}
         if self.method in {"POST", "PUT"}:
             content_type = self.headers.get("Content-Type", "")
             if "application/x-www-form-urlencoded" in content_type:
                 self.form = parse_qs(self.body.decode("utf-8"))
+            elif "multipart/form-data" in content_type:
+                self._parse_multipart(content_type)
         cookie_header = self.headers.get("Cookie", "")
         cookie = SimpleCookie(cookie_header)
         self.cookies = {key: morsel.value for key, morsel in cookie.items()}
@@ -41,6 +53,33 @@ class Request:
     def form_values(self, name: str) -> list[str]:
         return self.form.get(name, [])
 
+    def file_values(self, name: str) -> list[UploadedFile]:
+        return self.files.get(name, [])
+
+    def _parse_multipart(self, content_type: str) -> None:
+        message = BytesParser(policy=default).parsebytes(
+            f"Content-Type: {content_type}\r\n\r\n".encode("utf-8") + self.body
+        )
+        for part in message.iter_parts():
+            if part.get_content_disposition() != "form-data":
+                continue
+            name = part.get_param("name", header="Content-Disposition")
+            if not name:
+                continue
+            filename = part.get_param("filename", header="Content-Disposition")
+            payload = part.get_payload(decode=True)
+            if filename:
+                upload = UploadedFile(
+                    filename=filename,
+                    content_type=part.get_content_type(),
+                    data=payload,
+                )
+                self.files.setdefault(name, []).append(upload)
+            else:
+                charset = part.get_content_charset("utf-8") or "utf-8"
+                value = payload.decode(charset)
+                self.form.setdefault(name, []).append(value)
+
     def cookie(self, name: str) -> Optional[str]:
         return self.cookies.get(name)
 
@@ -49,7 +88,7 @@ class Request:
 class Response:
     status: int = HTTPStatus.OK
     headers: list[tuple[str, str]] = field(default_factory=list)
-    body: str = ""
+    body: bytes | str = ""
 
     def set_cookie(self, name: str, value: str, *, path: str = "/", max_age: Optional[int] = None) -> None:
         cookie = SimpleCookie()
@@ -71,6 +110,8 @@ class TruckInspectionWebApp:
         self.sessions: dict[str, int] = {}
         self.flash_messages: dict[str, list[tuple[str, str]]] = {}
         self.static_dir = Path(__file__).parent / "static"
+        self.upload_dir = Path(__file__).parent / "uploads"
+        self.upload_dir.mkdir(parents=True, exist_ok=True)
 
     # Public API -----------------------------------------------------------------
     def wsgi_app(self, environ: dict[str, Any], start_response: Callable) -> Iterable[bytes]:
@@ -88,11 +129,16 @@ class TruckInspectionWebApp:
         request = Request(method=method, target=target, headers=headers, body=body)
         response = self.handle(request)
         start_response(f"{response.status.value} {response.status.phrase}", response.headers)
-        return [response.body.encode("utf-8")]
+        body = response.body if isinstance(response.body, bytes) else response.body.encode("utf-8")
+        return [body]
 
     def handle(self, request: Request) -> Response:
-        if request.method == "GET" and request.path == "/static/styles.css":
-            return self._serve_static("styles.css")
+        if request.method == "GET" and request.path.startswith("/static/"):
+            filename = request.path.split("/", 2)[-1]
+            return self._serve_static(filename)
+        if request.method == "GET" and request.path.startswith("/uploads/"):
+            filename = request.path.split("/", 2)[-1]
+            return self._serve_upload(filename)
 
         route = self._match_route(request)
         if not route:
@@ -101,7 +147,7 @@ class TruckInspectionWebApp:
         response = handler(request, **params)
         if not any(name.lower() == "content-type" for name, _ in response.headers):
             response.add_header("Content-Type", "text/html; charset=utf-8")
-        if not (300 <= response.status.value < 400):
+        if not (300 <= response.status.value < 400) and isinstance(response.body, str):
             messages = self._consume_messages(request)
             if messages:
                 response.body = response.body.replace("<!--FLASH-->", self._render_messages(messages))
@@ -224,15 +270,13 @@ class TruckInspectionWebApp:
             try:
                 responses = self._collect_responses(request, inspection_enum)
                 photos = self._collect_photos(request)
-                video_url = request.form_value("video_url") or None
-                escalate = bool(request.form_value("escalate_visibility"))
+                escalate = request.form_value("escalate_visibility") == "1"
                 inspection = self.service.submit_inspection(
                     user=user,
                     truck=truck,
                     inspection_type=inspection_enum,
                     responses=responses,
                     photo_urls=photos,
-                    video_url=video_url,
                     escalate_visibility=escalate,
                 )
                 self._flash(request, "success", "Inspection submitted successfully.")
@@ -303,6 +347,8 @@ class TruckInspectionWebApp:
             <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
             <title>{html.escape(title)} - Truck Inspection App</title>
             <link rel=\"stylesheet\" href=\"/static/styles.css\" />
+            <script src=\"/static/app.js\" defer></script>
+
           </head>
           <body>
             <header class=\"top-bar\">
@@ -330,11 +376,33 @@ class TruckInspectionWebApp:
         return Response(status=HTTPStatus.NOT_FOUND, headers=[("Content-Type", "text/html; charset=utf-8")], body=body)
 
     def _serve_static(self, filename: str) -> Response:
-        path = self.static_dir / filename
-        if not path.exists():
+        static_root = self.static_dir.resolve()
+        path = (self.static_dir / filename).resolve()
+        try:
+            path.relative_to(static_root)
+        except ValueError:
             return self._not_found()
-        content = path.read_text(encoding="utf-8")
-        return Response(headers=[("Content-Type", "text/css; charset=utf-8")], body=content)
+        if not path.exists() or not path.is_file():
+            return self._not_found()
+        content_type, encoding = mimetypes.guess_type(str(path))
+        content_type = content_type or "application/octet-stream"
+        if content_type.startswith("text/"):
+            body = path.read_text(encoding="utf-8")
+            return Response(headers=[("Content-Type", f"{content_type}; charset=utf-8")], body=body)
+        data = path.read_bytes()
+        response = Response(headers=[("Content-Type", content_type)], body=data)
+        if encoding:
+            response.add_header("Content-Encoding", encoding)
+        return response
+
+    def _serve_upload(self, filename: str) -> Response:
+        safe_name = Path(filename).name
+        path = self.upload_dir / safe_name
+        if not path.exists() or not path.is_file():
+            return self._not_found()
+        content_type, _ = mimetypes.guess_type(str(path))
+        content_type = content_type or "application/octet-stream"
+        return Response(headers=[("Content-Type", content_type)], body=path.read_bytes())
 
     # Rendering helpers ----------------------------------------------------------
     def _nav_links(self, user: Optional[User]) -> str:
@@ -402,6 +470,12 @@ class TruckInspectionWebApp:
             inspection = item["inspection"]
             truck = item["truck"]
             ranger = item["ranger"]
+            escalated = (
+                "<span class=\"badge badge-alert\">Escalated</span>"
+                if inspection.escalate_visibility
+                else "<span class=\"badge\">Normal</span>"
+            )
+
             rows.append(
                 """
                 <tr>
@@ -419,7 +493,8 @@ class TruckInspectionWebApp:
                     truck=html.escape(truck.identifier),
                     ranger=html.escape(ranger.name),
                     created=inspection.created_at.strftime("%Y-%m-%d %H:%M"),
-                    escalated="Yes" if inspection.escalate_visibility else "No",
+                    escalated=escalated,
+
                 )
             )
         return f"""
@@ -449,15 +524,34 @@ class TruckInspectionWebApp:
                     """
                 )
             elif field.field_type is FieldType.TEXT:
-                required = " required" if field.required else ""
-                field_html.append(
-                    f"""
-                    <div class=\"form-field\">
-                      <label for=\"{field.id}\">{label}</label>
-                      <textarea id=\"{field.id}\" name=\"{field.id}\"{required}></textarea>
-                    </div>
-                    """
-                )
+                if field.id == "fuel_level":
+                    field_html.append(
+                        f"""
+                        <div class=\"form-field fuel-field\">
+                          <label>{label}</label>
+                          <div class=\"fuel-gauge\" data-fuel-gauge>
+                            <div class=\"gauge-dial\">
+                              <div class=\"gauge-needle\"></div>
+                              <div class=\"gauge-center\"></div>
+                              <div class=\"gauge-labels\"><span>E</span><span>1/2</span><span>F</span></div>
+                            </div>
+                            <input type=\"range\" min=\"0\" max=\"100\" step=\"5\" value=\"50\" data-fuel-slider />
+                          </div>
+                          <div class=\"fuel-reading\"><span data-fuel-value>50%</span></div>
+                          <input type=\"hidden\" id=\"{field.id}\" name=\"{field.id}\" value=\"50\" required />
+                        </div>
+                        """
+                    )
+                else:
+                    required = " required" if field.required else ""
+                    field_html.append(
+                        f"""
+                        <div class=\"form-field\">
+                          <label for=\"{field.id}\">{label}</label>
+                          <textarea id=\"{field.id}\" name=\"{field.id}\"{required}></textarea>
+                        </div>
+                        """
+                    )
             elif field.field_type is FieldType.NUMBER:
                 required = " required" if field.required else ""
                 field_html.append(
@@ -471,20 +565,21 @@ class TruckInspectionWebApp:
         return f"""
         <section class=\"card\">
           <h1>{inspection_type.value.title()} inspection for {html.escape(truck.identifier)}</h1>
-          <form method=\"post\" class=\"form\">
+          <form method=\"post\" class=\"form\" enctype=\"multipart/form-data\">
             {''.join(field_html)}
             <div class=\"form-field\">
-              <label for=\"photo_urls\">Photo URLs <span class=\"muted\">(4-10 entries, separated by new lines)</span></label>
-              <textarea id=\"photo_urls\" name=\"photo_urls\" required></textarea>
+              <label for=\"photos\">Vehicle photos <span class=\"muted\">(Capture or upload 4-10 images)</span></label>
+              <input type=\"file\" id=\"photos\" name=\"photos\" accept=\"image/*\" capture=\"environment\" multiple required />
             </div>
-            <div class=\"form-field\">
-              <label for=\"video_url\">Video URL <span class=\"muted\">(optional)</span></label>
-              <input type=\"url\" id=\"video_url\" name=\"video_url\" placeholder=\"https://...\" />
+            <div class=\"form-field escalate-field\">
+              <input type=\"hidden\" name=\"escalate_visibility\" id=\"escalate_visibility\" value=\"0\" />
+              <button type=\"button\" class=\"escalate-button\" data-escalate-toggle data-target=\"escalate_visibility\" aria-pressed=\"false\">
+                Escalate to supervisors
+              </button>
+              <p class=\"muted small\">Use when immediate supervisor attention is required.</p>
             </div>
-            <div class=\"form-field checkbox\">
-              <label><input type=\"checkbox\" name=\"escalate_visibility\" /> Escalate visibility for supervisors</label>
-            </div>
-            <button type=\"submit\">Submit inspection</button>
+            <button type=\"submit\" class=\"primary-action\">Submit inspection</button>
+
           </form>
         </section>
         """
@@ -501,6 +596,9 @@ class TruckInspectionWebApp:
                 value = inspection.responses[field.id]
                 if field.field_type is FieldType.BOOLEAN:
                     display = "Yes" if value else "No"
+                elif field.id == "fuel_level":
+                    display = f"{html.escape(str(value))}%"
+
                 else:
                     display = html.escape(str(value))
                 response_items.append(f"<li><strong>{html.escape(field.label)}:</strong> {display}</li>")
@@ -517,8 +615,9 @@ class TruckInspectionWebApp:
                 """
             )
         photos = "".join(
-            f"<li><a href=\"{html.escape(url)}\" target=\"_blank\" rel=\"noopener\">{html.escape(url)}</a></li>"
-            for url in inspection.photo_urls
+            f"<li><img src=\"{html.escape(url)}\" alt=\"Vehicle photo {index + 1}\" loading=\"lazy\" /></li>"
+            for index, url in enumerate(inspection.photo_urls)
+
         )
         note_form = f"""
         <form method=\"post\" action=\"/inspections/{inspection.id}/notes\" class=\"form\">
@@ -530,7 +629,7 @@ class TruckInspectionWebApp:
         if user.role == UserRole.RANGER and inspection.ranger_id != user.id:
             note_form = ""
         notes_html = '<ul class="notes">' + ''.join(note_items) + '</ul>' if note_items else '<p class="muted">No notes yet.</p>'
-        video = f"<h2>Video</h2><p><a href=\"{html.escape(inspection.video_url)}\" target=\"_blank\" rel=\"noopener\">{html.escape(inspection.video_url)}</a></p>" if inspection.video_url else ""
+
         return f"""
         <section class=\"card\">
           <h1>Inspection {inspection.id}</h1>
@@ -545,7 +644,7 @@ class TruckInspectionWebApp:
           <ul class=\"responses\">{''.join(response_items)}</ul>
           <h2>Photos</h2>
           <ul class=\"photo-list\">{photos}</ul>
-          {video}
+
         </section>
         <section class=\"card\">
           <h2>Notes</h2>
@@ -597,9 +696,17 @@ class TruckInspectionWebApp:
                 responses[field.id] = raw == "yes"
             elif field.field_type is FieldType.TEXT:
                 cleaned = raw.strip()
-                if field.required and not cleaned:
-                    raise ValueError(f"Please provide '{field.label}'.")
-                responses[field.id] = cleaned
+                if field.id == "fuel_level":
+                    if not cleaned or not cleaned.isdigit():
+                        raise ValueError("Please set the fuel gauge before submitting.")
+                    value = int(cleaned)
+                    if value < 0 or value > 100:
+                        raise ValueError("Fuel level must be between 0 and 100.")
+                    responses[field.id] = str(value)
+                else:
+                    if field.required and not cleaned:
+                        raise ValueError(f"Please provide '{field.label}'.")
+                    responses[field.id] = cleaned
             elif field.field_type is FieldType.NUMBER:
                 cleaned = raw.strip()
                 if not cleaned.isdigit():
@@ -608,11 +715,23 @@ class TruckInspectionWebApp:
         return responses
 
     def _collect_photos(self, request: Request) -> list[str]:
-        raw = request.form_value("photo_urls", "")
-        urls = [entry.strip() for entry in raw.replace(",", "\n").splitlines() if entry.strip()]
-        if len(urls) < 4 or len(urls) > 10:
-            raise ValueError("Please provide between 4 and 10 photo URLs.")
-        return urls
+        uploads = request.file_values("photos")
+        if len(uploads) < 4 or len(uploads) > 10:
+            raise ValueError("Please provide between 4 and 10 photos.")
+        return self._store_uploaded_photos(uploads)
+
+    def _store_uploaded_photos(self, uploads: Iterable[UploadedFile]) -> list[str]:
+        saved: list[str] = []
+        for upload in uploads:
+            if not upload.content_type.startswith("image/"):
+                raise ValueError("All uploads must be image files.")
+            suffix = Path(upload.filename).suffix or ".jpg"
+            filename = f"{uuid.uuid4().hex}{suffix}"
+            path = self.upload_dir / filename
+            path.write_bytes(upload.data)
+            saved.append(f"/uploads/{filename}")
+        return saved
+
 
     def _build_inspection_view(self, inspection: Inspection, include_notes: bool = False) -> dict[str, Any]:
         truck = self.service.get_truck(inspection.truck_id)

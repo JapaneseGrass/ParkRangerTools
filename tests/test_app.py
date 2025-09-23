@@ -15,7 +15,7 @@ def _quick_responses() -> dict[str, object]:
         "interior_clean": True,
         "seatbelts_functioning": True,
         "tire_inflation": True,
-        "fuel_level": "Full",
+        "fuel_level": "75",
         "odometer_miles": 1200,
     }
 
@@ -44,10 +44,10 @@ def _detailed_responses() -> dict[str, object]:
 
 def _photos() -> list[str]:
     return [
-        "https://example.com/photo1.jpg",
-        "https://example.com/photo2.jpg",
-        "https://example.com/photo3.jpg",
-        "https://example.com/photo4.jpg",
+        "photo1.jpg",
+        "photo2.jpg",
+        "photo3.jpg",
+        "photo4.jpg",
     ]
 
 
@@ -73,7 +73,7 @@ def test_ranger_submits_quick_inspection(seeded_app: TruckInspectionApp, ranger:
     )
     assert inspection.truck_id == truck.id
     assert inspection.ranger_id == ranger.id
-    assert inspection.responses["fuel_level"] == "Full"
+    assert inspection.responses["fuel_level"] == "75"
 
 
 def test_photo_validation(seeded_app: TruckInspectionApp, ranger: User, truck) -> None:

@@ -14,7 +14,6 @@ TOKEN_EXPIRY_MINUTES = 12 * 60
 
 
 
-
 @dataclass
 class AuthService:
     database: Database

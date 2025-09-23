@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from http import HTTPStatus
 from http.cookies import SimpleCookie
+import secrets
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -17,12 +18,44 @@ class FrontendClient:
         self.app = app
         self.cookies: dict[str, str] = {}
 
-    def request(self, method: str, path: str, *, data: dict[str, str] | None = None, follow_redirects: bool = False):
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        data: dict[str, str] | None = None,
+        files: dict[str, list[tuple[str, bytes, str]]] | None = None,
+        follow_redirects: bool = False,
+    ):
         headers: dict[str, str] = {}
         if self.cookies:
             headers["Cookie"] = "; ".join(f"{name}={value}" for name, value in self.cookies.items())
         body = b""
-        if data is not None:
+        if files:
+            boundary = "----WebKitFormBoundary" + secrets.token_hex(16)
+            parts: list[bytes] = []
+            for key, value in (data or {}).items():
+                parts.append(
+                    (
+                        f"--{boundary}\r\n"
+                        f"Content-Disposition: form-data; name=\"{key}\"\r\n\r\n"
+                        f"{value}\r\n"
+                    ).encode("utf-8")
+                )
+            for field, entries in files.items():
+                for filename, content, content_type in entries:
+                    parts.append(
+                        (
+                            f"--{boundary}\r\n"
+                            f"Content-Disposition: form-data; name=\"{field}\"; filename=\"{filename}\"\r\n"
+                            f"Content-Type: {content_type}\r\n\r\n"
+                        ).encode("utf-8")
+                    )
+                    parts.append(content + b"\r\n")
+            parts.append(f"--{boundary}--\r\n".encode("utf-8"))
+            body = b"".join(parts)
+            headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
+        elif data is not None:
             body = urlencode(data, doseq=True).encode("utf-8")
             headers["Content-Type"] = "application/x-www-form-urlencoded"
         request = Request(method=method, target=path, headers=headers, body=body)
@@ -82,16 +115,26 @@ def test_submit_quick_inspection(app, client: FrontendClient):
         if field.field_type is FieldType.BOOLEAN:
             form_data[field.id] = "yes"
         elif field.field_type is FieldType.TEXT:
-            form_data[field.id] = "All good"
+            if field.id == "fuel_level":
+                form_data[field.id] = "75"
+            else:
+                form_data[field.id] = "All good"
         elif field.field_type is FieldType.NUMBER:
             form_data[field.id] = "123"
-    form_data["photo_urls"] = "\n".join(f"https://example.com/photo-{index}" for index in range(1, 5))
-    form_data["video_url"] = ""
+    form_data["escalate_visibility"] = "0"
+
+    files = {
+        "photos": [
+            (f"photo-{index}.jpg", b"binarydata", "image/jpeg")
+            for index in range(1, 5)
+        ]
+    }
 
     response = client.request(
         "POST",
         f"/trucks/{truck.id}/inspect/{InspectionType.QUICK.value}",
         data=form_data,
+        files=files,
         follow_redirects=True,
     )
     assert "Inspection submitted successfully" in response.body
@@ -101,6 +144,7 @@ def test_submit_quick_inspection(app, client: FrontendClient):
     assert inspections
     assert inspections[0].truck_id == truck.id
     assert inspections[0].inspection_type is InspectionType.QUICK
+    assert all(photo.startswith("/uploads/") for photo in inspections[0].photo_urls)
 
 
 def test_supervisor_dashboard(client: FrontendClient):
