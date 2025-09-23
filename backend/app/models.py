@@ -21,6 +21,8 @@ class User:
     created_at: datetime
 
 
+
+
 @dataclass
 class Truck:
     id: int
@@ -32,6 +34,7 @@ class Truck:
 class InspectionType(str, Enum):
     QUICK = "quick"
     DETAILED = "detailed"
+
 
 
 @dataclass
@@ -46,6 +49,7 @@ class Inspection:
     video_url: Optional[str]
     created_at: datetime
     updated_at: datetime
+
 
 
 @dataclass

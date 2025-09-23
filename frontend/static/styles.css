@@ -1,0 +1,289 @@
+:root {
+  --bg: #f4f6f9;
+  --card-bg: #ffffff;
+  --primary: #1f6feb;
+  --primary-dark: #1553b7;
+  --text: #1c1e21;
+  --muted: #6b7280;
+  --border: #e5e7eb;
+  --success: #1a7f37;
+  --error: #b91c1c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.top-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 2rem;
+  background: var(--card-bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  font-weight: 600;
+  font-size: 1.2rem;
+}
+
+.nav-links a {
+  margin-left: 1rem;
+  text-decoration: none;
+  color: var(--primary);
+  font-weight: 500;
+}
+
+.nav-links a:hover {
+  color: var(--primary-dark);
+}
+
+.content {
+  max-width: 960px;
+  margin: 2rem auto;
+  padding: 0 1rem;
+}
+
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  box-shadow: 0 8px 16px rgba(15, 23, 42, 0.05);
+}
+
+.card h1,
+.card h2 {
+  margin-top: 0;
+}
+
+.grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.button {
+  display: inline-block;
+  padding: 0.5rem 1rem;
+  border-radius: 999px;
+  background: var(--primary);
+  color: white;
+  text-decoration: none;
+  text-align: center;
+  font-weight: 600;
+}
+
+.button.secondary {
+  background: transparent;
+  color: var(--primary);
+  border: 1px solid var(--primary);
+}
+
+.button:hover {
+  background: var(--primary-dark);
+  color: white;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.form-field label {
+  display: block;
+  font-weight: 500;
+  margin-bottom: 0.25rem;
+}
+
+.form input,
+.form textarea {
+  width: 100%;
+  padding: 0.6rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  font-size: 1rem;
+}
+
+.form textarea {
+  min-height: 100px;
+}
+
+.form button,
+button[type="submit"] {
+  align-self: flex-start;
+  padding: 0.7rem 1.4rem;
+  border-radius: 999px;
+  border: none;
+  background: var(--primary);
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.form button:hover,
+button[type="submit"]:hover {
+  background: var(--primary-dark);
+}
+
+.radio-group {
+  display: flex;
+  gap: 1rem;
+}
+
+.flash-messages {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1rem;
+}
+
+.flash {
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  margin-bottom: 0.5rem;
+}
+
+.flash.success {
+  background: rgba(26, 127, 55, 0.1);
+  color: var(--success);
+}
+
+.flash.error {
+  background: rgba(185, 28, 28, 0.1);
+  color: var(--error);
+}
+
+.flash.info {
+  background: rgba(31, 111, 235, 0.1);
+  color: var(--primary);
+}
+
+.inspection-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 1rem;
+}
+
+.inspection-table th,
+.inspection-table td {
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.inspection-table tbody tr:hover {
+  background: rgba(15, 23, 42, 0.03);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+}
+
+.meta div {
+  background: rgba(15, 23, 42, 0.03);
+  padding: 0.75rem;
+  border-radius: 8px;
+}
+
+.photo-list,
+.notes,
+.responses {
+  list-style: none;
+  padding: 0;
+}
+
+.photo-list li,
+.notes li,
+.responses li {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.photo-list li:last-child,
+.notes li:last-child,
+.responses li:last-child {
+  border-bottom: none;
+}
+
+.metrics {
+  display: flex;
+  gap: 2rem;
+}
+
+.metric {
+  background: rgba(31, 111, 235, 0.08);
+  padding: 1rem;
+  border-radius: 12px;
+  flex: 1;
+}
+
+.metric .label {
+  display: block;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.metric .value {
+  font-size: 1.6rem;
+  font-weight: 600;
+  margin-top: 0.25rem;
+}
+
+.footer {
+  text-align: center;
+  padding: 1rem;
+  color: var(--muted);
+}
+
+.card.narrow {
+  max-width: 420px;
+  margin: 3rem auto;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.checkbox label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.note-header {
+  display: flex;
+  justify-content: space-between;
+}
+
+@media (max-width: 600px) {
+  .top-bar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .metrics {
+    flex-direction: column;
+  }
+}

@@ -33,6 +33,20 @@ This generates `truck_inspections.db` in the current directory with seed users
 and trucks. You can then import `TruckInspectionApp` in a Python REPL and use
 its methods to drive the workflows programmatically.
 
+### Running the web interface
+
+Run the web layer directly to start a local HTTP server:
+
+```bash
+python -m frontend.app
+```
+
+The server seeds a local `truck_inspections.db` file the first time it runs. Use
+the default accounts to explore the interface:
+
+- Ranger: `alex.ranger@example.com` / `rangerpass`
+- Supervisor: `sam.supervisor@example.com` / `supervisorpass`
+
 ### Testing
 
 Install development dependencies (only `pytest`) if needed and run the tests:

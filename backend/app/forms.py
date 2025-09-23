@@ -13,6 +13,7 @@ class FieldType(str, Enum):
     NUMBER = "number"
 
 
+
 @dataclass(frozen=True)
 class InspectionField:
     id: str
