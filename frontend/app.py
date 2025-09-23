@@ -735,8 +735,20 @@ class TruckInspectionWebApp:
                 </li>
                 """
             )
+        can_download = user.role == UserRole.SUPERVISOR or inspection.ranger_id == user.id
         photos = "".join(
-            f"<li><img src=\"{html.escape(url)}\" alt=\"Vehicle photo {index + 1}\" loading=\"lazy\" /></li>"
+            f"""
+            <li>
+              <button type=\"button\" class=\"photo-thumb\" data-photo-src=\"{html.escape(url)}\" aria-label=\"View vehicle photo {index + 1}\">
+                <img src=\"{html.escape(url)}\" alt=\"Vehicle photo {index + 1}\" loading=\"lazy\" />
+              </button>
+              {(
+                f'<div class="photo-thumb__actions"><a href="{html.escape(url)}" download class="photo-thumb__download">Download</a></div>'
+                if can_download
+                else ''
+              )}
+            </li>
+            """
             for index, url in enumerate(inspection.photo_urls)
         )
         note_form = f"""
@@ -749,6 +761,25 @@ class TruckInspectionWebApp:
         if user.role == UserRole.RANGER and inspection.ranger_id != user.id:
             note_form = ""
         notes_html = '<ul class="notes">' + ''.join(note_items) + '</ul>' if note_items else '<p class="muted">No notes yet.</p>'
+        viewer_download = (
+            """
+            <a href=\"\" download class=\"photo-viewer__download\" data-photo-download hidden>Download</a>
+            """
+            if can_download
+            else ""
+        )
+
+        photo_viewer = """
+        <div class=\"photo-viewer\" data-photo-viewer hidden aria-hidden=\"true\" role=\"dialog\" aria-modal=\"true\" aria-label=\"Inspection photo viewer\" tabindex=\"-1\">
+          <div class=\"photo-viewer__backdrop\" data-photo-close></div>
+          <figure class=\"photo-viewer__figure\">
+            <button type=\"button\" class=\"photo-viewer__close\" data-photo-close aria-label=\"Close photo\">&times;</button>
+            <img src=\"\" alt=\"Inspection photo\" data-photo-image />
+            {viewer_download}
+          </figure>
+        </div>
+        """
+
         return f"""
         <section class=\"card\">
           <h1>Inspection {inspection.id}</h1>
@@ -764,6 +795,7 @@ class TruckInspectionWebApp:
           <h2>Photos</h2>
           <ul class=\"photo-list\">{photos}</ul>
         </section>
+        {photo_viewer}
         <section class=\"card\">
           <h2>Notes</h2>
           {notes_html}

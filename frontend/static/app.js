@@ -52,8 +52,94 @@
     sync();
   }
 
+  function initPhotoViewer() {
+    const viewer = document.querySelector('[data-photo-viewer]');
+    if (!viewer) {
+      return;
+    }
+    const image = viewer.querySelector('[data-photo-image]');
+    const closeControls = viewer.querySelectorAll('[data-photo-close]');
+    const downloadLink = viewer.querySelector('[data-photo-download]');
+    const body = document.body;
+    let activeTrigger = null;
+
+    function closeViewer() {
+      if (viewer.hasAttribute('hidden')) {
+        return;
+      }
+      viewer.setAttribute('hidden', '');
+      viewer.setAttribute('aria-hidden', 'true');
+      if (image) {
+        image.src = '';
+      }
+      if (downloadLink) {
+        downloadLink.href = '';
+        downloadLink.setAttribute('hidden', '');
+      }
+      body.classList.remove('photo-viewer-open');
+      if (activeTrigger) {
+        activeTrigger.focus();
+      }
+      activeTrigger = null;
+    }
+
+    function openViewer(src, trigger) {
+      if (!image) {
+        return;
+      }
+      activeTrigger = trigger || null;
+      image.src = src;
+      viewer.removeAttribute('hidden');
+      viewer.removeAttribute('aria-hidden');
+      if (downloadLink) {
+        downloadLink.href = src;
+        const parts = src.split('/');
+        const fileName = parts[parts.length - 1] || 'inspection-photo';
+        downloadLink.setAttribute('download', fileName);
+        downloadLink.removeAttribute('hidden');
+      }
+      body.classList.add('photo-viewer-open');
+      viewer.focus();
+    }
+
+    closeControls.forEach((control) => {
+      control.addEventListener('click', closeViewer);
+    });
+
+    viewer.addEventListener('click', (event) => {
+      if (event.target === viewer) {
+        closeViewer();
+      }
+    });
+
+    viewer.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        closeViewer();
+      }
+    });
+
+    document.querySelectorAll('[data-photo-src]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const src = button.getAttribute('data-photo-src');
+        if (src) {
+          openViewer(src, button);
+        }
+      });
+      button.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          const src = button.getAttribute('data-photo-src');
+          if (src) {
+            openViewer(src, button);
+          }
+        }
+      });
+    });
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('[data-fuel-gauge]').forEach((el) => initFuelGauge(el));
     document.querySelectorAll('[data-escalate-toggle]').forEach((el) => initEscalate(el));
+    initPhotoViewer();
   });
 })();

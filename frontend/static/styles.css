@@ -27,6 +27,10 @@ body {
   flex-direction: column;
 }
 
+body.photo-viewer-open {
+  overflow: hidden;
+}
+
 .top-bar {
   display: flex;
   justify-content: space-between;
@@ -340,12 +344,124 @@ input[type="file"] {
   border-radius: 12px;
 }
 
-.photo-list img {
+.photo-thumb {
+  display: inline-flex;
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: zoom-in;
+  border-radius: 10px;
+}
+
+.photo-thumb img {
   width: 100%;
   height: 100%;
   border-radius: 10px;
   object-fit: cover;
   box-shadow: 0 6px 12px rgba(31, 61, 42, 0.18);
+}
+
+.photo-thumb__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.3rem;
+}
+
+.photo-thumb__download {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--primary);
+  text-decoration: none;
+  padding: 0.25rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(47, 107, 60, 0.12);
+}
+
+.photo-thumb__download:hover,
+.photo-thumb__download:focus {
+  background: rgba(47, 107, 60, 0.2);
+  color: var(--primary-dark);
+}
+
+.photo-thumb:focus-visible {
+  outline: 3px solid rgba(47, 107, 60, 0.65);
+  outline-offset: 3px;
+}
+
+.photo-viewer[hidden] {
+  display: none;
+}
+
+.photo-viewer {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  z-index: 2000;
+}
+
+.photo-viewer__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(23, 32, 28, 0.75);
+}
+
+.photo-viewer__figure {
+  position: relative;
+  background: #ffffff;
+  padding: 1rem;
+  border-radius: 16px;
+  max-width: min(90vw, 720px);
+  max-height: min(90vh, 540px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 24px 48px rgba(17, 30, 22, 0.35);
+}
+
+.photo-viewer__figure img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 12px;
+}
+
+.photo-viewer__download {
+  position: absolute;
+  bottom: 0.9rem;
+  right: 0.9rem;
+  background: rgba(47, 107, 60, 0.85);
+  color: #ffffff;
+  text-decoration: none;
+  padding: 0.45rem 0.9rem;
+  border-radius: 999px;
+  font-weight: 600;
+  box-shadow: 0 8px 16px rgba(17, 30, 22, 0.3);
+}
+
+.photo-viewer__download:hover,
+.photo-viewer__download:focus {
+  background: rgba(47, 107, 60, 1);
+}
+
+.photo-viewer__close {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  border: none;
+  background: rgba(31, 42, 36, 0.85);
+  color: #ffffff;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 999px;
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.photo-viewer__close:hover,
+.photo-viewer__close:focus {
+  background: rgba(47, 107, 60, 0.9);
 }
 
 .notes {
