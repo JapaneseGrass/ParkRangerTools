@@ -991,19 +991,21 @@ class TruckInspectionWebApp:
         """
 
     def _render_dashboard(self, metrics: dict[str, Any], inspections: list[dict[str, Any]]) -> str:
-        ranger_rows = []
-        for entry in metrics["ranger_metrics"]:
+        personnel_rows = []
+        for entry in metrics["personnel_metrics"]:
+            user = entry["user"]
+            role_label = "Ranger" if user.role == UserRole.RANGER else "Supervisor"
             recent = entry["most_recent_inspection"]
             recent_text = recent.strftime("%Y-%m-%d %H:%M") if recent else "<span class=\"muted\">No inspections</span>"
-            ranger_rows.append(
-                f"<tr><td>{html.escape(entry['ranger'].name)}</td><td>{entry['inspections_completed']}</td><td>{recent_text}</td></tr>"
+            personnel_rows.append(
+                f"<tr><td>{html.escape(user.name)}</td><td>{role_label}</td><td>{entry['inspections_completed']}</td><td>{recent_text}</td></tr>"
             )
-        ranger_table = """
+        personnel_table = """
         <table class=\"inspection-table\">
-          <thead><tr><th>Ranger</th><th>Completed</th><th>Most recent</th></tr></thead>
+          <thead><tr><th>Name</th><th>Role</th><th>Completed</th><th>Most recent</th></tr></thead>
           <tbody>{rows}</tbody>
         </table>
-        """.format(rows="".join(ranger_rows))
+        """.format(rows="".join(personnel_rows))
         inspection_table = self._render_inspection_table("All inspections", inspections)
         return f"""
         <section class=\"card\">
@@ -1012,8 +1014,8 @@ class TruckInspectionWebApp:
             <div class=\"metric\"><span class=\"label\">Total inspections</span><span class=\"value\">{metrics['total_inspections']}</span></div>
             <div class=\"metric\"><span class=\"label\">Escalated</span><span class=\"value\">{metrics['escalated_inspections']}</span></div>
           </div>
-          <h2>Ranger compliance</h2>
-          {ranger_table}
+          <h2>Team compliance</h2>
+          {personnel_table}
         </section>
         {inspection_table}
         """

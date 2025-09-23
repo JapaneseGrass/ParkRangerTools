@@ -98,16 +98,22 @@ class InspectionService:
     def list_notes(self, inspection_id: int) -> List[InspectionNote]:
         return list(self.database.list_notes(inspection_id))
 
-    def ranger_metrics(self) -> list[dict[str, object]]:
+    def personnel_metrics(self) -> list[dict[str, object]]:
         metrics: list[dict[str, object]] = []
-        inspections = list(self.database.list_inspections())
-        for ranger in self.database.list_rangers():
-            ranger_inspections = [insp for insp in inspections if insp.ranger_id == ranger.id]
-            most_recent = max((insp.created_at for insp in ranger_inspections), default=None)
+        personnel = self.database.list_users_by_roles([UserRole.RANGER, UserRole.SUPERVISOR])
+        assignments = list(self.database.list_assignments())
+        completed_assignments = [assignment for assignment in assignments if assignment.returned_at is not None]
+        for person in personnel:
+            user_assignments = [assignment for assignment in completed_assignments if assignment.ranger_id == person.id]
+            if user_assignments:
+                most_recent = max(assignment.returned_at for assignment in user_assignments if assignment.returned_at is not None)
+            else:
+                most_recent = None
             metrics.append(
                 {
-                    "ranger": ranger,
-                    "inspections_completed": len(ranger_inspections),
+                    "user": person,
+                    "role": person.role,
+                    "inspections_completed": len(user_assignments),
                     "most_recent_inspection": most_recent,
                 }
             )
@@ -115,9 +121,11 @@ class InspectionService:
 
     def dashboard(self) -> dict[str, object]:
         inspections = list(self.database.list_inspections())
+        assignments = list(self.database.list_assignments())
+        closed_assignments = [assignment for assignment in assignments if assignment.returned_at is not None]
         escalated = sum(1 for insp in inspections if insp.escalate_visibility)
         return {
-            "total_inspections": len(inspections),
+            "total_inspections": len(closed_assignments),
             "escalated_inspections": escalated,
-            "ranger_metrics": self.ranger_metrics(),
+            "personnel_metrics": self.personnel_metrics(),
         }

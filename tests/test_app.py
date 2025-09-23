@@ -161,10 +161,32 @@ def test_dashboard_metrics(seeded_app: TruckInspectionApp, ranger: User, supervi
         photo_urls=_photos(),
         escalate_visibility=True,
     )
+    # Perform checkout/return to contribute to compliance totals
+    start_inspection = seeded_app.submit_inspection(
+        user=ranger,
+        truck=truck,
+        inspection_type=InspectionType.QUICK,
+        responses=_quick_responses(),
+        photo_urls=_photos(),
+    )
+    assignment = seeded_app.checkout_truck(ranger=ranger, truck=truck, inspection=start_inspection)
+    end_inspection = seeded_app.submit_inspection(
+        user=ranger,
+        truck=truck,
+        inspection_type=InspectionType.RETURN,
+        responses={"odometer_miles": 2000, "return_notes": "Done"},
+        photo_urls=[],
+    )
+    seeded_app.return_truck(assignment_id=assignment.id, ranger=ranger, inspection=end_inspection)
+
     dashboard = seeded_app.dashboard(supervisor=supervisor)
-    assert dashboard["total_inspections"] == 2
+    assert dashboard["total_inspections"] == 1
     assert dashboard["escalated_inspections"] == 1
-    assert dashboard["ranger_metrics"][0]["inspections_completed"] == 2
+    metrics = dashboard["personnel_metrics"]
+    ranger_entry = next(entry for entry in metrics if entry["user"].id == ranger.id)
+    supervisor_entry = next(entry for entry in metrics if entry["user"].id == supervisor.id)
+    assert ranger_entry["inspections_completed"] == 1
+    assert supervisor_entry["inspections_completed"] == 0
 
 
 def test_ranger_only_sees_own_inspections(seeded_app: TruckInspectionApp, ranger: User, supervisor: User, truck) -> None:

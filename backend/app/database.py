@@ -127,11 +127,20 @@ class Database:
             row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         return _row_to_user(row) if row else None
 
-    def list_rangers(self) -> Iterable[User]:
+    def list_users_by_roles(self, roles: Iterable[UserRole]) -> Iterable[User]:
+        role_list = list(roles)
+        if not role_list:
+            return []
+        placeholders = ",".join("?" for _ in role_list)
         with self.session() as conn:
-            rows = conn.execute("SELECT * FROM users WHERE role = ? ORDER BY name", (UserRole.RANGER.value,)).fetchall()
-        for row in rows:
-            yield _row_to_user(row)
+            rows = conn.execute(
+                f"SELECT * FROM users WHERE role IN ({placeholders}) ORDER BY name",
+                tuple(role.value for role in role_list),
+            ).fetchall()
+        return [_row_to_user(row) for row in rows]
+
+    def list_rangers(self) -> Iterable[User]:
+        return self.list_users_by_roles([UserRole.RANGER])
 
     # Truck operations
     def add_truck(self, identifier: str, description: Optional[str], active: bool = True) -> Truck:
@@ -360,6 +369,12 @@ class Database:
             rows = conn.execute(
                 "SELECT * FROM truck_assignments WHERE returned_at IS NULL",
             ).fetchall()
+        for row in rows:
+            yield _row_to_assignment(row)
+
+    def list_assignments(self) -> Iterable[TruckAssignment]:
+        with self.session() as conn:
+            rows = conn.execute("SELECT * FROM truck_assignments").fetchall()
         for row in rows:
             yield _row_to_assignment(row)
 
