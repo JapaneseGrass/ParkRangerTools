@@ -95,6 +95,14 @@ TRUCK_CATEGORY_INFO: dict[str, dict[str, str]] = {
     },
 }
 
+TOP_NAV_ICONS: list[str] = [
+    TRUCK_CATEGORY_INFO["mid_size"]["icon"],
+    TRUCK_CATEGORY_INFO["mid_size"]["icon"],
+    TRUCK_CATEGORY_INFO["mid_size"]["icon"],
+    TRUCK_CATEGORY_INFO["full_size"]["icon"],
+    TRUCK_CATEGORY_INFO["full_size"]["icon"],
+]
+
 
 @dataclass
 class UploadedFile:
@@ -509,6 +517,7 @@ class TruckInspectionWebApp:
     # Utility responses ----------------------------------------------------------
     def _page(self, title: str, user: Optional[User], content: str) -> Response:
         nav = self._nav_links(user)
+        icons = self._top_nav_icons()
         body = f"""
         <!doctype html>
         <html lang=\"en\">
@@ -522,6 +531,7 @@ class TruckInspectionWebApp:
           <body>
             <header class=\"top-bar\">
               <div class=\"brand\">Truck Inspection App</div>
+              <div class=\"top-bar-icons\">{icons}</div>
               <nav class=\"nav-links\">{nav}</nav>
             </header>
             <main class=\"content\">
@@ -533,6 +543,9 @@ class TruckInspectionWebApp:
         </html>
         """
         return Response(body=body)
+
+    def _top_nav_icons(self) -> str:
+        return "".join(f'<span class="top-bar-icon">{icon.strip()}</span>' for icon in TOP_NAV_ICONS)
 
     def _redirect(self, location: str) -> Response:
         response = Response(status=HTTPStatus.SEE_OTHER)
@@ -712,6 +725,9 @@ class TruckInspectionWebApp:
           <div class=\"actions\">{actions_html}</div>
         </article>
         """
+
+    def _render_truck_legend(self, trucks: list[Truck]) -> str:
+        return ""
 
     def _render_inspection_table(self, heading: str, inspections: list[dict[str, Any]]) -> str:
         if not inspections:
