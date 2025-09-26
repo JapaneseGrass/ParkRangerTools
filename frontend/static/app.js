@@ -1,33 +1,128 @@
 (() => {
   function initFuelGauge(gauge) {
-    const slider = gauge.querySelector('[data-fuel-slider]');
-    const field = gauge.parentElement?.querySelector('input[type="hidden"][name="fuel_level"]');
-    const needle = gauge.querySelector('.gauge-needle');
-    const output = gauge.parentElement?.querySelector('[data-fuel-value]');
+    const fieldContainer = gauge.closest('.fuel-field');
+    const field = fieldContainer?.querySelector('input[type="hidden"][name="fuel_level"]');
+    const needle = gauge.querySelector('[data-fuel-needle]');
+    const dial = gauge.querySelector('[data-fuel-dial]');
+    const output = fieldContainer?.querySelector('[data-fuel-value]');
+    if (!dial || !needle) {
+      return;
+    }
 
-    function update(value) {
-      const clamped = Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
-      const angle = -90 + (clamped / 100) * 180;
-      if (needle) {
-        needle.style.transform = `rotate(${angle}deg)`;
+    let currentValue = 50;
+
+    function clamp(value) {
+      if (!Number.isFinite(value)) {
+        return 0;
       }
+      return Math.max(0, Math.min(100, value));
+    }
+
+    function applyValue(value) {
+      currentValue = clamp(Math.round(value));
+      const angle = -90 + (currentValue / 100) * 180;
+      needle.style.transform = `rotate(${angle}deg)`;
+      dial.setAttribute('aria-valuenow', String(currentValue));
+      dial.setAttribute('aria-valuetext', `${currentValue}% full`);
       if (field) {
-        field.value = String(clamped);
+        field.value = String(currentValue);
       }
       if (output) {
-        output.textContent = `${clamped}%`;
+        output.textContent = `${currentValue}%`;
       }
     }
 
-    const initial = parseInt(field?.value ?? slider?.value ?? '50', 10);
-    update(Number.isNaN(initial) ? 50 : initial);
-
-    if (slider) {
-      slider.addEventListener('input', (event) => {
-        const value = parseInt(event.target.value, 10);
-        update(Number.isNaN(value) ? 0 : value);
-      });
+    function valueFromPoint(clientX, clientY) {
+      const rect = dial.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height;
+      const dx = clientX - centerX;
+      let dy = centerY - clientY;
+      if (dy <= 0) {
+        dy = 0.0001;
+      }
+      let angle = (Math.atan2(dx, dy) * 180) / Math.PI;
+      if (!Number.isFinite(angle)) {
+        angle = 0;
+      }
+      const clampedAngle = Math.max(-90, Math.min(90, angle));
+      const value = ((clampedAngle + 90) / 180) * 100;
+      return clamp(value);
     }
+
+    function handlePointer(event) {
+      const value = valueFromPoint(event.clientX, event.clientY);
+      applyValue(value);
+    }
+
+    let dragging = false;
+
+    dial.addEventListener(
+      'pointerdown',
+      (event) => {
+        event.preventDefault();
+        dragging = true;
+        dial.setPointerCapture(event.pointerId);
+        dial.classList.add('is-dragging');
+        handlePointer(event);
+      },
+      { passive: false }
+    );
+
+    dial.addEventListener(
+      'pointermove',
+      (event) => {
+        if (!dragging) {
+          return;
+        }
+        event.preventDefault();
+        handlePointer(event);
+      },
+      { passive: false }
+    );
+
+    function endDrag(event) {
+      if (!dragging) {
+        return;
+      }
+      dragging = false;
+      dial.classList.remove('is-dragging');
+      if (dial.hasPointerCapture && dial.hasPointerCapture(event.pointerId)) {
+        dial.releasePointerCapture(event.pointerId);
+      }
+    }
+
+    dial.addEventListener('pointerup', endDrag);
+    dial.addEventListener('pointercancel', endDrag);
+
+    dial.addEventListener('keydown', (event) => {
+      const { key } = event;
+      let delta = 0;
+      if (key === 'ArrowLeft' || key === 'ArrowDown') {
+        delta = -5;
+      } else if (key === 'ArrowRight' || key === 'ArrowUp') {
+        delta = 5;
+      } else if (key === 'PageDown') {
+        delta = -10;
+      } else if (key === 'PageUp') {
+        delta = 10;
+      } else if (key === 'Home') {
+        event.preventDefault();
+        applyValue(0);
+        return;
+      } else if (key === 'End') {
+        event.preventDefault();
+        applyValue(100);
+        return;
+      } else {
+        return;
+      }
+      event.preventDefault();
+      applyValue(currentValue + delta);
+    });
+
+    const initial = parseInt(field?.value ?? dial.getAttribute('aria-valuenow') ?? '50', 10);
+    applyValue(Number.isNaN(initial) ? 50 : initial);
   }
 
   function initEscalate(button) {

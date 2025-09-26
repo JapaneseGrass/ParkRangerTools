@@ -998,17 +998,25 @@ class TruckInspectionWebApp:
                     if fuel_value is None:
                         fuel_value = "50"
                     slider_value = html.escape(str(fuel_value))
+                    ticks: list[str] = []
+                    for tick_index in range(9):
+                        value = tick_index * 12.5
+                        angle = -90 + (value / 100) * 180
+                        tick_class = "gauge-tick gauge-tick--major" if tick_index % 2 == 0 else "gauge-tick gauge-tick--minor"
+                        ticks.append(
+                            f'<span class="{tick_class}" style="--tick-rotation:{angle:.6f}deg"></span>'
+                        )
                     field_html.append(
                         f"""
                         <div class=\"form-field fuel-field\">
                           <label>{label}</label>
                           <div class=\"fuel-gauge\" data-fuel-gauge>
-                            <div class=\"gauge-dial\">
-                              <div class=\"gauge-needle\"></div>
+                            <div class=\"gauge-dial\" data-fuel-dial role=\"slider\" tabindex=\"0\" aria-label=\"{label}\" aria-valuemin=\"0\" aria-valuemax=\"100\" aria-valuenow=\"{slider_value}\">
+                              <div class=\"gauge-ticks\">{''.join(ticks)}</div>
+                              <div class=\"gauge-needle\" data-fuel-needle></div>
                               <div class=\"gauge-center\"></div>
                               <div class=\"gauge-labels\"><span>E</span><span>1/2</span><span>F</span></div>
                             </div>
-                            <input type=\"range\" min=\"0\" max=\"100\" step=\"5\" value=\"{slider_value}\" data-fuel-slider />
                           </div>
                           <div class=\"fuel-reading\"><span data-fuel-value>{slider_value}%</span></div>
                           <input type=\"hidden\" id=\"{field.id}\" name=\"{field.id}\" value=\"{slider_value}\" required />

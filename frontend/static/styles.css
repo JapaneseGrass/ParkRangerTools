@@ -576,66 +576,111 @@ input[type="file"] {
 }
 
 .fuel-field {
-  gap: 1rem;
+  gap: 1.1rem;
 }
 
 .fuel-gauge {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.9rem;
 }
 
 .gauge-dial {
   position: relative;
-  width: 140px;
-  height: 70px;
-  border-top-left-radius: 140px;
-  border-top-right-radius: 140px;
-  background: linear-gradient(180deg, #f8faf5 0%, #e3eadf 100%);
-  border: 4px solid rgba(47, 107, 60, 0.35);
+  width: 220px;
+  height: 120px;
+  border-top-left-radius: 220px;
+  border-top-right-radius: 220px;
+  background: linear-gradient(180deg, #f8faf5 0%, #e0eadb 100%);
+  border: 5px solid rgba(47, 107, 60, 0.35);
+  box-shadow: inset 0 6px 14px rgba(32, 49, 32, 0.18);
   overflow: hidden;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.gauge-dial.is-dragging,
+.gauge-dial:active {
+  cursor: grabbing;
 }
 
 .gauge-needle {
   position: absolute;
   bottom: 0;
   left: 50%;
-  width: 4px;
-  height: 65px;
+  width: 6px;
+  height: 112px;
   background: var(--accent);
   transform-origin: bottom center;
   transform: rotate(0deg);
-  transition: transform 0.2s ease-out;
+  transition: transform 0.08s ease-out;
+  border-radius: 999px;
+  box-shadow: 0 0 12px rgba(220, 86, 72, 0.35);
 }
 
 .gauge-center {
   position: absolute;
-  bottom: -6px;
+  bottom: -10px;
   left: 50%;
-  width: 16px;
-  height: 16px;
+  width: 26px;
+  height: 26px;
   background: var(--primary-dark);
   border-radius: 50%;
   transform: translateX(-50%);
-  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.7);
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.75);
+}
+
+.gauge-ticks {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.gauge-tick {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 0;
+  height: 100%;
+  transform-origin: bottom center;
+  transform: rotate(var(--tick-rotation));
+}
+
+.gauge-tick::after {
+  content: "";
+  display: block;
+  width: 3px;
+  height: 28px;
+  margin: 0 auto;
+  background: rgba(47, 107, 60, 0.45);
+  border-radius: 2px;
+}
+
+.gauge-tick--major::after {
+  width: 4px;
+  height: 44px;
+  background: rgba(47, 107, 60, 0.8);
+}
+
+.gauge-tick--minor::after {
+  width: 2px;
+  height: 30px;
+  background: rgba(47, 107, 60, 0.35);
 }
 
 .gauge-labels {
   position: absolute;
-  bottom: 6px;
+  bottom: 12px;
   left: 0;
   width: 100%;
   display: flex;
   justify-content: space-between;
-  padding: 0 12px;
+  padding: 0 18px;
   font-weight: 600;
-  color: var(--muted);
-  font-size: 0.8rem;
-}
-
-.fuel-gauge input[type="range"] {
-  width: 100%;
+  color: var(--primary-dark);
+  font-size: 0.9rem;
 }
 
 .fuel-reading {
