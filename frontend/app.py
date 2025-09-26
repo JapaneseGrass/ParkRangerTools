@@ -119,7 +119,6 @@ class UploadedFile:
     content_type: str
     data: bytes
 
-
 @dataclass
 class Request:
     method: str
@@ -344,7 +343,7 @@ class TruckInspectionWebApp:
         return self._page(page_title, user, content)
 
     def _login_get(self, request: Request) -> Response:
-        return self._page("Sign in", None, self._render_login())
+        return self._page("Sign in", None, self._render_login(), show_icons=False)
 
     def _login_post(self, request: Request) -> Response:
         email = (request.form_value("email") or "").strip()
@@ -352,7 +351,7 @@ class TruckInspectionWebApp:
         token = self.service.auth.authenticate(email, password)
         if token is None:
             self._flash(request, "error", "Invalid credentials. Please try again.")
-            return self._page("Sign in", None, self._render_login())
+            return self._page("Sign in", None, self._render_login(), show_icons=False)
         user = self.service.database.get_user(token.user_id)
         response = self._redirect("/")
         if user:
@@ -625,9 +624,18 @@ class TruckInspectionWebApp:
         return self._page("Supervisor dashboard", user, content)
 
     # Utility responses ----------------------------------------------------------
-    def _page(self, title: str, user: Optional[User], content: str) -> Response:
+    def _page(
+        self,
+        title: str,
+        user: Optional[User],
+        content: str,
+        *,
+        body_class: Optional[str] = None,
+        show_icons: bool = True,
+    ) -> Response:
         nav = self._nav_links(user)
-        icons = self._top_nav_icons()
+        icons = self._top_nav_icons() if show_icons else ""
+        body_attr = f' class="{body_class}"' if body_class else ""
         body = f"""
         <!doctype html>
         <html lang=\"en\">
@@ -638,7 +646,7 @@ class TruckInspectionWebApp:
             <link rel=\"stylesheet\" href=\"/static/styles.css\" />
             <script src=\"/static/app.js\" defer></script>
           </head>
-          <body>
+          <body{body_attr}>
             <header class=\"top-bar\">
               <div class=\"brand\">Truck Inspection App</div>
               <div class=\"top-bar-icons\">{icons}</div>
