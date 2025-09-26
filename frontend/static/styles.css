@@ -201,8 +201,12 @@ body.photo-viewer-open {
 }
 
 .form-field label {
-  font-weight: 600;
-  color: var(--text);
+  font-weight: 700;
+  color: #2f3e33;
+  font-size: 1.05rem;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.6);
 }
 
 .form input,
