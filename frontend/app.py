@@ -96,14 +96,6 @@ TRUCK_CATEGORY_INFO: dict[str, dict[str, str]] = {
     },
 }
 
-TOP_NAV_ICONS: list[str] = [
-    TRUCK_CATEGORY_INFO["mid_size"]["icon"],
-    TRUCK_CATEGORY_INFO["mid_size"]["icon"],
-    TRUCK_CATEGORY_INFO["mid_size"]["icon"],
-    TRUCK_CATEGORY_INFO["full_size"]["icon"],
-    TRUCK_CATEGORY_INFO["full_size"]["icon"],
-]
-
 
 def backend_role_for_email(email: str) -> UserRole:
     normalized = email.strip().lower()
@@ -663,7 +655,20 @@ class TruckInspectionWebApp:
         return Response(body=body)
 
     def _top_nav_icons(self) -> str:
-        return "".join(f'<span class="top-bar-icon">{icon.strip()}</span>' for icon in TOP_NAV_ICONS)
+        available = sorted(self.service.list_available_trucks(), key=lambda truck: truck.identifier.upper())
+        if not available:
+            return ""
+        icon_fragments: list[str] = []
+        tracked_categories = {"full_size", "mid_size"}
+        for truck in available:
+            profile = self._truck_profile(truck)
+            if profile["category"] not in tracked_categories:
+                continue
+            label = html.escape(truck.identifier.upper())
+            icon_fragments.append(
+                f'<span class="top-bar-icon" title="Truck {label} available">{profile["icon"]}</span>'
+            )
+        return "".join(icon_fragments)
 
     def _redirect(self, location: str) -> Response:
         response = Response(status=HTTPStatus.SEE_OTHER)
