@@ -191,10 +191,11 @@ def test_dashboard_metrics(seeded_app: TruckInspectionApp, ranger: User, supervi
 
 def test_ranger_only_sees_own_inspections(seeded_app: TruckInspectionApp, ranger: User, supervisor: User, truck) -> None:
     other = seeded_app.auth.register_user(
-        name="Other Ranger",
-        email="other@example.com",
+        name="Test Ranger",
+        email="test@email.com",
         password="password123",
         role=UserRole.RANGER,
+        ranger_number="RN-9001",
     )
     seeded_app.submit_inspection(
         user=ranger,
@@ -269,3 +270,40 @@ def test_checkout_and_return_flow(seeded_app: TruckInspectionApp, ranger: User, 
 
     available_ids = {t.id for t in seeded_app.list_available_trucks()}
     assert truck.id in available_ids
+
+
+def test_register_user_allowlist(app: TruckInspectionApp) -> None:
+    user = app.auth.register_user(
+        name="Angel Rodriguez",
+        email="angel.rodriguezii@denvergov.org",
+        password="securepass",
+        role=UserRole.RANGER,
+        ranger_number="RN-3001",
+    )
+    assert user.email == "angel.rodriguezii@denvergov.org"
+    assert user.ranger_number == "RN-3001"
+
+
+def test_register_user_disallowed(app: TruckInspectionApp) -> None:
+    with pytest.raises(ValueError):
+        app.auth.register_user(
+            name="Unauthorized",
+            email="unauthorized@example.com",
+            password="password123",
+            role=UserRole.RANGER,
+            ranger_number="RN-9999",
+        )
+
+
+def test_update_password(app: TruckInspectionApp) -> None:
+    user = app.auth.register_user(
+        name="Test User",
+        email="test@email.com",
+        password="initialpass",
+        ranger_number="RN-4001",
+    )
+    updated = app.auth.update_password("test@email.com", "newpass")
+    assert updated.id == user.id
+    assert updated.ranger_number == "RN-4001"
+    token = app.auth.authenticate("test@email.com", "newpass")
+    assert token is not None

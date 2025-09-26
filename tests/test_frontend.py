@@ -268,6 +268,64 @@ def test_ranger_can_return_truck(app, client: FrontendClient):
     assert inspections[0].inspection_type is InspectionType.RETURN
 
 
+def test_register_and_password_update(app, client: FrontendClient):
+    response = client.request(
+        "POST",
+        "/register",
+        data={
+            "name": "Test User",
+            "email": "test@email.com",
+            "ranger_number": "RN-5001",
+            "password": "summer123",
+            "confirm_password": "summer123",
+        },
+        follow_redirects=True,
+    )
+    assert "Account created" in response.body
+
+    response = client.request(
+        "POST",
+        "/password",
+        data={
+            "email": "test@email.com",
+            "password": "newpass456",
+            "confirm_password": "newpass456",
+        },
+        follow_redirects=True,
+    )
+    assert "Password updated" in response.body
+
+
+def test_account_update(app, client: FrontendClient):
+    login(client, "alex.ranger@example.com", "rangerpass")
+    response = client.request(
+        "POST",
+        "/account",
+        data={
+            "name": "Alex Updated",
+            "ranger_number": "RN-1001",
+            "password": "newpass123",
+            "confirm_password": "newpass123",
+        },
+        follow_redirects=True,
+    )
+    assert "Account details updated" in response.body
+
+    updated = app.service.database.get_user_by_email("alex.ranger@example.com")
+    assert updated is not None
+    assert updated.name == "Alex Updated"
+    assert updated.ranger_number == "RN-1001"
+
+    client.request("GET", "/logout", follow_redirects=True)
+    relog = client.request(
+        "POST",
+        "/login",
+        data={"email": "alex.ranger@example.com", "password": "newpass123"},
+        follow_redirects=True,
+    )
+    assert "Welcome, Alex Updated!" in relog.body
+
+
 def test_supervisor_can_submit_inspection(app, client: FrontendClient):
     response = login(client, "sam.supervisor@example.com", "supervisorpass")
     assert "Quick inspection" in response.body

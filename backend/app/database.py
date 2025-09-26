@@ -39,7 +39,8 @@ class Database:
                     email TEXT NOT NULL UNIQUE,
                     password_hash TEXT NOT NULL,
                     role TEXT NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    ranger_number TEXT
                 );
                 CREATE TABLE IF NOT EXISTS trucks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,6 +90,13 @@ class Database:
                     WHERE returned_at IS NULL;
             """
         )
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
+            if "ranger_number" not in columns:
+                conn.execute("ALTER TABLE users ADD COLUMN ranger_number TEXT")
+            if "phone" in columns:
+                conn.execute(
+                    "UPDATE users SET ranger_number = COALESCE(ranger_number, phone)"
+                )
 
     @contextmanager
     def _connect(self) -> Generator[sqlite3.Connection, None, None]:
@@ -106,16 +114,31 @@ class Database:
             yield conn
 
     # User operations
-    def add_user(self, name: str, email: str, password_hash: str, role: UserRole) -> User:
+    def add_user(
+        self,
+        name: str,
+        email: str,
+        password_hash: str,
+        role: UserRole,
+        ranger_number: Optional[str] = None,
+    ) -> User:
         now = _utcnow()
         created_at = _format_datetime(now)
         with self.session() as conn:
             cursor = conn.execute(
-                "INSERT INTO users (name, email, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)",
-                (name, email, password_hash, role.value, created_at),
+                "INSERT INTO users (name, email, password_hash, role, created_at, ranger_number) VALUES (?, ?, ?, ?, ?, ?)",
+                (name, email, password_hash, role.value, created_at, ranger_number),
             )
             user_id = cursor.lastrowid
-        return User(id=user_id, name=name, email=email, password_hash=password_hash, role=role, created_at=now)
+        return User(
+            id=user_id,
+            name=name,
+            email=email,
+            password_hash=password_hash,
+            role=role,
+            created_at=now,
+            ranger_number=ranger_number,
+        )
 
     def get_user_by_email(self, email: str) -> Optional[User]:
         with self.session() as conn:
@@ -378,8 +401,27 @@ class Database:
         for row in rows:
             yield _row_to_assignment(row)
 
+    def update_user_password(self, user_id: int, password_hash: str) -> None:
+        with self.session() as conn:
+            conn.execute(
+                "UPDATE users SET password_hash = ? WHERE id = ?",
+                (password_hash, user_id),
+            )
+
+    def update_user_profile(self, user_id: int, name: str, ranger_number: Optional[str]) -> User:
+        with self.session() as conn:
+            conn.execute(
+                "UPDATE users SET name = ?, ranger_number = ? WHERE id = ?",
+                (name, ranger_number, user_id),
+            )
+        user = self.get_user(user_id)
+        if not user:
+            raise LookupError("User not found")
+        return user
+
 
 def _row_to_user(row: sqlite3.Row) -> User:
+    ranger_number = row["ranger_number"] if "ranger_number" in row.keys() else None
     return User(
         id=row["id"],
         name=row["name"],
@@ -387,6 +429,7 @@ def _row_to_user(row: sqlite3.Row) -> User:
         password_hash=row["password_hash"],
         role=UserRole(row["role"]),
         created_at=_parse_datetime(row["created_at"]),
+        ranger_number=ranger_number,
     )
 
 

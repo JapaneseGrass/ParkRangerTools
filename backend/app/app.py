@@ -39,6 +39,7 @@ class TruckInspectionApp:
                 email="alex.ranger@example.com",
                 password="rangerpass",
                 role=UserRole.RANGER,
+                ranger_number="RN-1001",
             )
         if not self.database.get_user_by_email("sam.supervisor@example.com"):
             self.auth.register_user(
@@ -46,6 +47,7 @@ class TruckInspectionApp:
                 email="sam.supervisor@example.com",
                 password="supervisorpass",
                 role=UserRole.SUPERVISOR,
+                ranger_number="RN-2001",
             )
         truck_definitions = [
             ("SM88", None),
@@ -139,6 +141,9 @@ class TruckInspectionApp:
 
     def get_forms(self) -> dict[str, list[dict[str, object]]]:
         return self.inspections.list_forms()
+
+    def update_account(self, user_id: int, *, name: str, ranger_number: Optional[str]) -> User:
+        return self.auth.update_profile(user_id=user_id, name=name, ranger_number=ranger_number)
 
     def checkout_truck(
         self,

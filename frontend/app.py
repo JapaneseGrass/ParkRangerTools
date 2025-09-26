@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlparse
 from backend.app.app import TruckInspectionApp
 from backend.app.forms import FieldType, get_form_definition
 from backend.app.models import Inspection, InspectionType, Truck, TruckAssignment, User, UserRole
+from backend.app.auth import ALLOWED_EMAIL_ROLES
 
 
 TRUCK_CATEGORY_MAP: dict[str, str] = {
@@ -102,6 +103,14 @@ TOP_NAV_ICONS: list[str] = [
     TRUCK_CATEGORY_INFO["full_size"]["icon"],
     TRUCK_CATEGORY_INFO["full_size"]["icon"],
 ]
+
+
+def backend_role_for_email(email: str) -> UserRole:
+    normalized = email.strip().lower()
+    role = ALLOWED_EMAIL_ROLES.get(normalized)
+    if role is None:
+        raise ValueError("Registration is restricted to approved park ranger accounts.")
+    return role
 
 
 @dataclass
@@ -257,6 +266,12 @@ class TruckInspectionWebApp:
             ("GET", "/login"): self._login_get,
             ("POST", "/login"): self._login_post,
             ("GET", "/logout"): self._logout,
+            ("GET", "/register"): self._register_get,
+            ("POST", "/register"): self._register_post,
+            ("GET", "/password"): self._password_get,
+            ("POST", "/password"): self._password_post,
+            ("GET", "/account"): self._account_get,
+            ("POST", "/account"): self._account_post,
             ("GET", "/inspections"): self._inspection_list,
             ("GET", "/dashboard"): self._dashboard,
         }
@@ -350,6 +365,101 @@ class TruckInspectionWebApp:
         self._clear_session(request, response)
         self._flash(request, "info", "Signed out.")
         return response
+
+    def _register_get(self, request: Request) -> Response:
+        return self._page("Create account", None, self._render_register())
+
+    def _register_post(self, request: Request) -> Response:
+        name = (request.form_value("name") or "").strip()
+        email = (request.form_value("email") or "").strip()
+        ranger_number = (request.form_value("ranger_number") or "").strip()
+        password = request.form_value("password") or ""
+        confirm = request.form_value("confirm_password") or ""
+        if not name or not email or not password:
+            self._flash(request, "error", "All fields are required.")
+            return self._page("Create account", None, self._render_register(name=name, email=email, ranger_number=ranger_number))
+        if not ranger_number:
+            self._flash(request, "error", "Ranger number is required.")
+            return self._page("Create account", None, self._render_register(name=name, email=email, ranger_number=ranger_number))
+        if password != confirm:
+            self._flash(request, "error", "Passwords do not match.")
+            return self._page("Create account", None, self._render_register(name=name, email=email, ranger_number=ranger_number))
+        try:
+            role = backend_role_for_email(email)
+            self.service.auth.register_user(name=name, email=email, password=password, role=role, ranger_number=ranger_number)
+        except ValueError as exc:
+            self._flash(request, "error", str(exc))
+            return self._page("Create account", None, self._render_register(name=name, email=email, ranger_number=ranger_number))
+        except Exception:
+            self._flash(request, "error", "Unable to create account. The email may already be registered.")
+            return self._page("Create account", None, self._render_register(name=name, email=email, ranger_number=ranger_number))
+        self._flash(request, "success", "Account created. You can now sign in.")
+        return self._redirect("/login")
+
+    def _password_get(self, request: Request) -> Response:
+        return self._page("Update password", None, self._render_password())
+
+    def _password_post(self, request: Request) -> Response:
+        email = (request.form_value("email") or "").strip()
+        password = request.form_value("password") or ""
+        confirm = request.form_value("confirm_password") or ""
+        if not email or not password:
+            self._flash(request, "error", "Email and new password are required.")
+            return self._page("Update password", None, self._render_password(email=email))
+        if password != confirm:
+            self._flash(request, "error", "Passwords do not match.")
+            return self._page("Update password", None, self._render_password(email=email))
+        try:
+            self.service.auth.update_password(email=email, new_password=password)
+        except ValueError as exc:
+            self._flash(request, "error", str(exc))
+            return self._page("Update password", None, self._render_password(email=email))
+        except LookupError as exc:
+            self._flash(request, "error", str(exc))
+            return self._page("Update password", None, self._render_password(email=email))
+        self._flash(request, "success", "Password updated. You can now sign in with the new password.")
+        return self._redirect("/login")
+
+    def _account_get(self, request: Request) -> Response:
+        user = self._current_user(request)
+        if not user:
+            return self._redirect("/login")
+        return self._page(
+            "Account",
+            user,
+            self._render_account(user, name=user.name, ranger_number=user.ranger_number or ""),
+        )
+
+    def _account_post(self, request: Request) -> Response:
+        user = self._current_user(request)
+        if not user:
+            return self._redirect("/login")
+        name = (request.form_value("name") or "").strip()
+        ranger_number = (request.form_value("ranger_number") or "").strip()
+        password = request.form_value("password") or ""
+        confirm = request.form_value("confirm_password") or ""
+        if not name or not ranger_number:
+            self._flash(request, "error", "Name and ranger number are required.")
+            return self._page(
+                "Account",
+                user,
+                self._render_account(user, name=name or user.name, ranger_number=ranger_number),
+            )
+        try:
+            updated_user = self.service.auth.update_profile(user.id, name=name, ranger_number=ranger_number)
+            if password or confirm:
+                if password != confirm:
+                    self._flash(request, "error", "Passwords do not match.")
+                    return self._page("Account", user, self._render_account(user, name=name, ranger_number=ranger_number))
+                self.service.auth.update_password(email=updated_user.email, new_password=password)
+        except ValueError as exc:
+            self._flash(request, "error", str(exc))
+            return self._page("Account", user, self._render_account(user, name=name, ranger_number=ranger_number))
+        except LookupError as exc:
+            self._flash(request, "error", str(exc))
+            return self._page("Account", user, self._render_account(user, name=name, ranger_number=ranger_number))
+        self._flash(request, "success", "Account details updated.")
+        return self._redirect("/account")
 
     def _truck_inspection(self, request: Request, *, truck_id: str, inspection_type: str) -> Response:
         user = self._current_user(request)
@@ -594,9 +704,12 @@ class TruckInspectionWebApp:
             links.append('<a href="/inspections">Inspections</a>')
             if user.role == UserRole.SUPERVISOR:
                 links.append('<a href="/dashboard">Dashboard</a>')
+            links.append('<a href="/account">Account</a>')
             links.append('<a href="/logout">Sign out</a>')
         else:
             links.append('<a href="/login">Sign in</a>')
+            links.append('<a href="/register">Register</a>')
+            links.append('<a href="/password">Update password</a>')
         return "".join(links)
 
     def _render_messages(self, messages: Iterable[tuple[str, str]]) -> str:
@@ -616,7 +729,68 @@ class TruckInspectionWebApp:
             <input type=\"password\" id=\"password\" name=\"password\" required />
             <button type=\"submit\">Sign in</button>
           </form>
-          <p class=\"hint\">Use the seeded accounts described in the README.</p>
+          <p class=\"hint\">Need access? <a href=\"/register\">Create an approved account</a> or <a href=\"/password\">update your password</a>.</p>
+        </section>
+        """
+
+    def _render_register(self, *, name: str = "", email: str = "", ranger_number: str = "") -> str:
+        return f"""
+        <section class=\"card narrow\">
+          <h1>Create account</h1>
+          <form method=\"post\" class=\"form\">
+            <label for=\"name\">Full name</label>
+            <input type=\"text\" id=\"name\" name=\"name\" value=\"{html.escape(name)}\" required autofocus />
+            <label for=\"reg-email\">Email</label>
+            <input type=\"email\" id=\"reg-email\" name=\"email\" value=\"{html.escape(email)}\" required />
+            <label for=\"reg-number\">Ranger number</label>
+            <input type=\"text\" id=\"reg-number\" name=\"ranger_number\" value=\"{html.escape(ranger_number)}\" required />
+            <label for=\"reg-password\">Password</label>
+            <input type=\"password\" id=\"reg-password\" name=\"password\" required />
+            <label for=\"reg-confirm\">Confirm password</label>
+            <input type=\"password\" id=\"reg-confirm\" name=\"confirm_password\" required />
+            <button type=\"submit\">Create account</button>
+          </form>
+          <p class=\"hint\">Only approved park ranger email addresses may register.</p>
+        </section>
+        """
+
+    def _render_password(self, *, email: str = "") -> str:
+        return f"""
+        <section class=\"card narrow\">
+          <h1>Update password</h1>
+          <form method=\"post\" class=\"form\">
+            <label for=\"pw-email\">Email</label>
+            <input type=\"email\" id=\"pw-email\" name=\"email\" value=\"{html.escape(email)}\" required autofocus />
+            <label for=\"pw-new\">New password</label>
+            <input type=\"password\" id=\"pw-new\" name=\"password\" required />
+            <label for=\"pw-confirm\">Confirm password</label>
+            <input type=\"password\" id=\"pw-confirm\" name=\"confirm_password\" required />
+            <button type=\"submit\">Update password</button>
+          </form>
+          <p class=\"hint\">Use an approved email address already added to the system.</p>
+        </section>
+        """
+
+    def _render_account(self, user: User, *, name: str, ranger_number: str) -> str:
+        number_value = html.escape(ranger_number)
+        return f"""
+        <section class=\"card narrow\">
+          <h1>Account information</h1>
+          <form method=\"post\" class=\"form\">
+            <label for=\"acct-name\">Full name</label>
+            <input type=\"text\" id=\"acct-name\" name=\"name\" value=\"{html.escape(name)}\" required autofocus />
+            <label>Email</label>
+            <input type=\"email\" value=\"{html.escape(user.email)}\" disabled />
+            <label for=\"acct-number\">Ranger number</label>
+            <input type=\"text\" id=\"acct-number\" name=\"ranger_number\" value=\"{number_value}\" required />
+            <hr />
+            <p class=\"muted\">Update your password (optional)</p>
+            <label for=\"acct-password\">New password</label>
+            <input type=\"password\" id=\"acct-password\" name=\"password\" />
+            <label for=\"acct-confirm\">Confirm password</label>
+            <input type=\"password\" id=\"acct-confirm\" name=\"confirm_password\" />
+            <button type=\"submit\" class=\"primary-action\">Save changes</button>
+          </form>
         </section>
         """
 

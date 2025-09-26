@@ -76,6 +76,13 @@ inspection to capture ending mileage, ensuring the fleet log always reflects the
 latest odometer values. The return flow is lightweight—only the final mileage is
 required, with optional notes if the ranger wants to flag anything for follow-up.
 
+Account creation is restricted to an allow list. Only approved ranger addresses
+(`alex.ranger@example.com`, `sam.supervisor@example.com`,
+`angel.rodriguezii@denvergov.org`, `test@email.com`) may be registered in the
+system. New accounts must provide a ranger number, and existing users can update
+their profile (name and ranger number) or reset their password from the login
+flow.
+
 ### Testing
 
 Run the pytest suite (after installing the optional dev dependencies) to verify

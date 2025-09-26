@@ -19,6 +19,7 @@ class User:
     password_hash: str
     role: UserRole
     created_at: datetime
+    ranger_number: Optional[str] = None
 
 
 @dataclass
