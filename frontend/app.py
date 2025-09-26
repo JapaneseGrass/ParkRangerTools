@@ -979,9 +979,15 @@ class TruckInspectionWebApp:
                     f"""
                     <div class=\"form-field\">
                       <label>{label}</label>
-                      <div class=\"radio-group\">
-                        <label><input type=\"radio\" name=\"{field.id}\" value=\"yes\" {yes_checked} required /> Yes</label>
-                        <label><input type=\"radio\" name=\"{field.id}\" value=\"no\" {no_checked} required /> No</label>
+                      <div class=\"radio-group\" role=\"radiogroup\" aria-label=\"{label}\">
+                        <label class=\"radio-option\">
+                          <input type=\"radio\" name=\"{field.id}\" value=\"yes\" {yes_checked} required />
+                          <span>Yes</span>
+                        </label>
+                        <label class=\"radio-option\">
+                          <input type=\"radio\" name=\"{field.id}\" value=\"no\" {no_checked} required />
+                          <span>No</span>
+                        </label>
                       </div>
                     </div>
                     """
