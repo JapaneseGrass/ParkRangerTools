@@ -188,6 +188,14 @@ body.photo-viewer-open {
   box-shadow: 0 12px 22px rgba(47, 107, 60, 0.22);
 }
 
+.button:disabled,
+.primary-action:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
 .button:focus-visible,
 .primary-action:focus-visible {
   outline: 3px solid rgba(47, 107, 60, 0.35);
@@ -198,6 +206,36 @@ body.photo-viewer-open {
   display: flex;
   flex-direction: column;
   gap: 1.2rem;
+}
+
+.inline-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.8rem;
+  align-items: end;
+  margin-bottom: 1rem;
+}
+
+.inline-form label {
+  grid-column: 1 / -1;
+}
+
+.security-questions {
+  border: 1px solid rgba(47, 107, 60, 0.18);
+  padding: 1rem;
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  background: rgba(247, 252, 247, 0.6);
+}
+
+.security-questions legend {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.85rem;
+  color: var(--primary-dark);
 }
 
 .form-field {

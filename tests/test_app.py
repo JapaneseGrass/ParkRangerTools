@@ -196,6 +196,11 @@ def test_ranger_only_sees_own_inspections(seeded_app: TruckInspectionApp, ranger
         password="password123",
         role=UserRole.RANGER,
         ranger_number="RN-9001",
+        security_responses=[
+            ("Favorite trail?", "Canyon"),
+            ("First ranger station?", "Pinecrest"),
+            ("Go-to field snack?", "Jerky"),
+        ],
     )
     seeded_app.submit_inspection(
         user=ranger,
@@ -279,6 +284,11 @@ def test_register_user_allowlist(app: TruckInspectionApp) -> None:
         password="securepass",
         role=UserRole.RANGER,
         ranger_number="RN-3001",
+        security_responses=[
+            ("Favorite lookout?", "Sunrise Point"),
+            ("First ranger partner?", "Luis"),
+            ("Best campsite?", "Bear Creek"),
+        ],
     )
     assert user.email == "angel.rodriguezii@denvergov.org"
     assert user.ranger_number == "RN-3001"
@@ -292,6 +302,11 @@ def test_register_user_disallowed(app: TruckInspectionApp) -> None:
             password="password123",
             role=UserRole.RANGER,
             ranger_number="RN-9999",
+            security_responses=[
+                ("Q1", "A1"),
+                ("Q2", "A2"),
+                ("Q3", "A3"),
+            ],
         )
 
 
@@ -301,8 +316,17 @@ def test_update_password(app: TruckInspectionApp) -> None:
         email="test@email.com",
         password="initialpass",
         ranger_number="RN-4001",
+        security_responses=[
+            ("Favorite overlook?", "High Point"),
+            ("First badge number?", "42"),
+            ("Preferred route?", "River Path"),
+        ],
     )
-    updated = app.auth.update_password("test@email.com", "newpass")
+    updated = app.auth.update_password(
+        "test@email.com",
+        "newpass",
+        ["High Point", "42", "River Path"],
+    )
     assert updated.id == user.id
     assert updated.ranger_number == "RN-4001"
     token = app.auth.authenticate("test@email.com", "newpass")

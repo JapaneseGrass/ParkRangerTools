@@ -20,6 +20,7 @@ class User:
     role: UserRole
     created_at: datetime
     ranger_number: Optional[str] = None
+    security_questions: Optional[list[dict[str, str]]] = None
 
 
 @dataclass

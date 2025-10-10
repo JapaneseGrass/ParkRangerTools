@@ -366,48 +366,131 @@ class TruckInspectionWebApp:
         ranger_number = (request.form_value("ranger_number") or "").strip()
         password = request.form_value("password") or ""
         confirm = request.form_value("confirm_password") or ""
+        security_questions = []
+        security_responses: list[tuple[str, str]] = []
+        for idx in range(1, 4):
+            question = (request.form_value(f"security_question_{idx}") or "").strip()
+            answer = (request.form_value(f"security_answer_{idx}") or "").strip()
+            security_questions.append(question)
+            security_responses.append((question, answer))
         if not name or not email or not password:
             self._flash(request, "error", "All fields are required.")
-            return self._page("Create account", None, self._render_register(name=name, email=email, ranger_number=ranger_number))
+            return self._page(
+                "Create account",
+                None,
+                self._render_register(
+                    name=name,
+                    email=email,
+                    ranger_number=ranger_number,
+                    security_questions=security_questions,
+                ),
+            )
         if not ranger_number:
             self._flash(request, "error", "Ranger number is required.")
-            return self._page("Create account", None, self._render_register(name=name, email=email, ranger_number=ranger_number))
+            return self._page(
+                "Create account",
+                None,
+                self._render_register(
+                    name=name,
+                    email=email,
+                    ranger_number=ranger_number,
+                    security_questions=security_questions,
+                ),
+            )
         if password != confirm:
             self._flash(request, "error", "Passwords do not match.")
-            return self._page("Create account", None, self._render_register(name=name, email=email, ranger_number=ranger_number))
+            return self._page(
+                "Create account",
+                None,
+                self._render_register(
+                    name=name,
+                    email=email,
+                    ranger_number=ranger_number,
+                    security_questions=security_questions,
+                ),
+            )
         try:
             role = backend_role_for_email(email)
-            self.service.auth.register_user(name=name, email=email, password=password, role=role, ranger_number=ranger_number)
+            self.service.auth.register_user(
+                name=name,
+                email=email,
+                password=password,
+                security_responses=security_responses,
+                role=role,
+                ranger_number=ranger_number,
+            )
         except ValueError as exc:
             self._flash(request, "error", str(exc))
-            return self._page("Create account", None, self._render_register(name=name, email=email, ranger_number=ranger_number))
+            return self._page(
+                "Create account",
+                None,
+                self._render_register(
+                    name=name,
+                    email=email,
+                    ranger_number=ranger_number,
+                    security_questions=security_questions,
+                ),
+            )
         except Exception:
             self._flash(request, "error", "Unable to create account. The email may already be registered.")
-            return self._page("Create account", None, self._render_register(name=name, email=email, ranger_number=ranger_number))
+            return self._page(
+                "Create account",
+                None,
+                self._render_register(
+                    name=name,
+                    email=email,
+                    ranger_number=ranger_number,
+                    security_questions=security_questions,
+                ),
+            )
         self._flash(request, "success", "Account created. You can now sign in.")
         return self._redirect("/login")
 
     def _password_get(self, request: Request) -> Response:
-        return self._page("Update password", None, self._render_password())
+        email = ""
+        questions: list[str] | None = None
+        if request.query.get("email"):
+            email = (request.query["email"][0] or "").strip()
+            if email:
+                user = self.service.database.get_user_by_email(email.lower())
+                if user and user.security_questions:
+                    questions = [entry.get("question", "") for entry in user.security_questions]
+                else:
+                    self._flash(request, "error", "No account found for that email or security questions not set.")
+        return self._page("Update password", None, self._render_password(email=email, questions=questions))
 
     def _password_post(self, request: Request) -> Response:
         email = (request.form_value("email") or "").strip()
         password = request.form_value("password") or ""
         confirm = request.form_value("confirm_password") or ""
+        user = self.service.database.get_user_by_email(email.lower()) if email else None
+        stored_questions = [entry.get("question", "") for entry in (user.security_questions if user else [])]
+        questions = stored_questions or None
         if not email or not password:
             self._flash(request, "error", "Email and new password are required.")
-            return self._page("Update password", None, self._render_password(email=email))
+            return self._page("Update password", None, self._render_password(email=email, questions=questions))
         if password != confirm:
             self._flash(request, "error", "Passwords do not match.")
-            return self._page("Update password", None, self._render_password(email=email))
+            return self._page("Update password", None, self._render_password(email=email, questions=questions))
+        answers: list[str] = []
+        if user:
+            if not stored_questions:
+                self._flash(request, "error", "Security questions are not configured for this account.")
+                return self._page("Update password", None, self._render_password(email=email, questions=questions))
+            for idx in range(1, len(stored_questions) + 1):
+                answer = (request.form_value(f"security_answer_{idx}") or "").strip()
+                if not answer:
+                    self._flash(request, "error", "Please answer all security questions.")
+                    return self._page("Update password", None, self._render_password(email=email, questions=questions))
+                answers.append(answer)
         try:
-            self.service.auth.update_password(email=email, new_password=password)
+            self.service.auth.update_password(email=email, new_password=password, security_answers=answers)
         except ValueError as exc:
             self._flash(request, "error", str(exc))
-            return self._page("Update password", None, self._render_password(email=email))
+            return self._page("Update password", None, self._render_password(email=email, questions=questions))
         except LookupError as exc:
             self._flash(request, "error", str(exc))
-            return self._page("Update password", None, self._render_password(email=email))
+            return self._page("Update password", None, self._render_password(email=email, questions=questions))
         self._flash(request, "success", "Password updated. You can now sign in with the new password.")
         return self._redirect("/login")
 
@@ -441,14 +524,69 @@ class TruckInspectionWebApp:
             if password or confirm:
                 if password != confirm:
                     self._flash(request, "error", "Passwords do not match.")
-                    return self._page("Account", user, self._render_account(user, name=name, ranger_number=ranger_number))
-                self.service.auth.update_password(email=updated_user.email, new_password=password)
+                    return self._page(
+                        "Account",
+                        user,
+                        self._render_account(
+                            user,
+                            name=name,
+                            ranger_number=ranger_number,
+                        ),
+                    )
+                stored_questions = [entry.get("question", "") for entry in (updated_user.security_questions or [])]
+                answers: list[str] = []
+                for idx in range(1, len(stored_questions) + 1):
+                    answer = (request.form_value(f"acct_security_answer_{idx}") or "").strip()
+                    if not answer:
+                        self._flash(request, "error", "Please answer all security questions to change your password.")
+                        return self._page(
+                            "Account",
+                            user,
+                            self._render_account(
+                                user,
+                                name=name,
+                                ranger_number=ranger_number,
+                            ),
+                        )
+                    answers.append(answer)
+                if not answers:
+                    self._flash(request, "error", "Security questions are required to change your password.")
+                    return self._page(
+                        "Account",
+                        user,
+                        self._render_account(
+                            user,
+                            name=name,
+                            ranger_number=ranger_number,
+                        ),
+                    )
+                self.service.auth.update_password(
+                    email=updated_user.email,
+                    new_password=password,
+                    security_answers=answers,
+                )
         except ValueError as exc:
             self._flash(request, "error", str(exc))
-            return self._page("Account", user, self._render_account(user, name=name, ranger_number=ranger_number))
+            return self._page(
+                "Account",
+                user,
+                self._render_account(
+                    user,
+                    name=name,
+                    ranger_number=ranger_number,
+                ),
+            )
         except LookupError as exc:
             self._flash(request, "error", str(exc))
-            return self._page("Account", user, self._render_account(user, name=name, ranger_number=ranger_number))
+            return self._page(
+                "Account",
+                user,
+                self._render_account(
+                    user,
+                    name=name,
+                    ranger_number=ranger_number,
+                ),
+            )
         self._flash(request, "success", "Account details updated.")
         return self._redirect("/account")
 
@@ -746,7 +884,30 @@ class TruckInspectionWebApp:
         </section>
         """
 
-    def _render_register(self, *, name: str = "", email: str = "", ranger_number: str = "") -> str:
+    def _render_register(
+        self,
+        *,
+        name: str = "",
+        email: str = "",
+        ranger_number: str = "",
+        security_questions: Optional[list[str]] = None,
+    ) -> str:
+        questions = security_questions or ["", "", ""]
+        question_fields = []
+        for idx in range(1, 4):
+            question_value = html.escape(questions[idx - 1]) if idx - 1 < len(questions) else ""
+            question_fields.append(
+                f"""
+                <div class=\"form-field\">
+                  <label for=\"sec-question-{idx}\">Security question {idx}</label>
+                  <input type=\"text\" id=\"sec-question-{idx}\" name=\"security_question_{idx}\" value=\"{question_value}\" required />
+                </div>
+                <div class=\"form-field\">
+                  <label for=\"sec-answer-{idx}\">Answer {idx}</label>
+                  <input type=\"text\" id=\"sec-answer-{idx}\" name=\"security_answer_{idx}\" required />
+                </div>
+                """
+            )
         return f"""
         <section class=\"card narrow\">
           <h1>Create account</h1>
@@ -761,31 +922,95 @@ class TruckInspectionWebApp:
             <input type=\"password\" id=\"reg-password\" name=\"password\" required />
             <label for=\"reg-confirm\">Confirm password</label>
             <input type=\"password\" id=\"reg-confirm\" name=\"confirm_password\" required />
+            <fieldset class=\"security-questions\">
+              <legend>Security questions</legend>
+              <p class=\"muted small\">These will be used to verify your identity when resetting a password.</p>
+              {''.join(question_fields)}
+            </fieldset>
             <button type=\"submit\">Create account</button>
           </form>
           <p class=\"hint\">Only approved park ranger email addresses may register.</p>
         </section>
         """
 
-    def _render_password(self, *, email: str = "") -> str:
+    def _render_password(self, *, email: str = "", questions: Optional[list[str]] = None) -> str:
+        email_value = html.escape(email)
+        question_html = ""
+        if questions:
+            answer_fields = []
+            for idx, prompt in enumerate(questions, start=1):
+                answer_fields.append(
+                    f"""
+                    <div class=\"form-field\">
+                      <label>{html.escape(prompt)}</label>
+                      <input type=\"text\" name=\"security_answer_{idx}\" required />
+                    </div>
+                    """
+                )
+            question_html = f"""
+            <fieldset class=\"security-questions\">
+              <legend>Verify your identity</legend>
+              {''.join(answer_fields)}
+            </fieldset>
+            """
+            submit_disabled = ""
+        else:
+            submit_disabled = " disabled"
         return f"""
         <section class=\"card narrow\">
           <h1>Update password</h1>
+          <form method=\"get\" class=\"form inline-form\">
+            <label for=\"lookup-email\">Account email</label>
+            <input type=\"email\" id=\"lookup-email\" name=\"email\" value=\"{email_value}\" required autofocus />
+            <button type=\"submit\" class=\"button secondary\">Load security questions</button>
+          </form>
           <form method=\"post\" class=\"form\">
-            <label for=\"pw-email\">Email</label>
-            <input type=\"email\" id=\"pw-email\" name=\"email\" value=\"{html.escape(email)}\" required autofocus />
+            <input type=\"hidden\" name=\"email\" value=\"{email_value}\" />
             <label for=\"pw-new\">New password</label>
             <input type=\"password\" id=\"pw-new\" name=\"password\" required />
             <label for=\"pw-confirm\">Confirm password</label>
             <input type=\"password\" id=\"pw-confirm\" name=\"confirm_password\" required />
-            <button type=\"submit\">Update password</button>
+            {question_html or '<p class="muted small">Load your security questions to continue.</p>'}
+            <button type=\"submit\" class=\"primary-action\"{submit_disabled}>Update password</button>
           </form>
-          <p class=\"hint\">Use an approved email address already added to the system.</p>
+          <p class=\"hint\">Use the email address from your ranger account to view your saved security prompts.</p>
         </section>
         """
 
-    def _render_account(self, user: User, *, name: str, ranger_number: str) -> str:
+    def _render_account(
+        self,
+        user: User,
+        *,
+        name: str,
+        ranger_number: str,
+        security_questions: Optional[list[str]] = None,
+    ) -> str:
         number_value = html.escape(ranger_number)
+        questions = security_questions if security_questions is not None else [
+            entry.get("question", "") for entry in (user.security_questions or [])
+        ]
+        answers_section = ""
+        if questions:
+            answer_fields = []
+            for idx, prompt in enumerate(questions, start=1):
+                if not prompt:
+                    continue
+                answer_fields.append(
+                    f"""
+                    <div class=\"form-field\">
+                      <label>{html.escape(prompt)}</label>
+                      <input type=\"text\" name=\"acct_security_answer_{idx}\" />
+                    </div>
+                    """
+                )
+            if answer_fields:
+                answers_section = f"""
+                <fieldset class=\"security-questions\">
+                  <legend>Verify to change password</legend>
+                  <p class=\"muted small\">Provide answers to your saved security questions to update your password.</p>
+                  {''.join(answer_fields)}
+                </fieldset>
+                """
         return f"""
         <section class=\"card narrow\">
           <h1>Account information</h1>
@@ -802,6 +1027,7 @@ class TruckInspectionWebApp:
             <input type=\"password\" id=\"acct-password\" name=\"password\" />
             <label for=\"acct-confirm\">Confirm password</label>
             <input type=\"password\" id=\"acct-confirm\" name=\"confirm_password\" />
+            {answers_section}
             <button type=\"submit\" class=\"primary-action\">Save changes</button>
           </form>
         </section>

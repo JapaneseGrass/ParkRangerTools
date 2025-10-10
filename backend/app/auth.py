@@ -29,6 +29,8 @@ class AuthService:
         name: str,
         email: str,
         password: str,
+        *,
+        security_responses: list[tuple[str, str]],
         role: Optional[UserRole] = None,
         ranger_number: Optional[str] = None,
     ) -> User:
@@ -43,7 +45,15 @@ class AuthService:
         if not ranger_number or not ranger_number.strip():
             raise ValueError("Ranger number is required.")
         password_hash = self._hash_password(password)
-        return self.database.add_user(name, normalized, password_hash, role, ranger_number.strip())
+        prepared_questions = self._prepare_security_questions(security_responses)
+        return self.database.add_user(
+            name,
+            normalized,
+            password_hash,
+            role,
+            ranger_number.strip(),
+            prepared_questions,
+        )
 
     def authenticate(self, email: str, password: str) -> Optional[SessionToken]:
         normalized = email.strip().lower()
@@ -66,16 +76,31 @@ class AuthService:
             return None
         return self.database.get_user(session.user_id)
 
-    def update_password(self, email: str, new_password: str) -> User:
+    def update_password(self, email: str, new_password: str, security_answers: list[str]) -> User:
         normalized = email.strip().lower()
         if normalized not in ALLOWED_EMAIL_ROLES:
             raise ValueError("Password updates are restricted to approved park ranger accounts.")
         user = self.database.get_user_by_email(normalized)
         if not user:
             raise LookupError("Account not found.")
+        if not user.security_questions:
+            raise ValueError("Security questions are not configured for this account.")
+        if len(user.security_questions) != len(security_answers):
+            raise ValueError("All security questions must be answered.")
+        for entry, answer in zip(user.security_questions, security_answers):
+            if not self._verify_answer(answer, entry.get("answer_hash", "")):
+                raise ValueError("Security answers did not match our records.")
         password_hash = self._hash_password(new_password)
         self.database.update_user_password(user.id, password_hash)
         return self.database.get_user(user.id)
+
+    def set_security_questions(self, email: str, security_responses: list[tuple[str, str]]) -> User:
+        normalized = email.strip().lower()
+        user = self.database.get_user_by_email(normalized)
+        if not user:
+            raise LookupError("Account not found.")
+        prepared = self._prepare_security_questions(security_responses)
+        return self.database.update_user_security_questions(user.id, prepared)
 
     def update_profile(self, user_id: int, *, name: str, ranger_number: Optional[str]) -> User:
         if not name.strip():
@@ -96,4 +121,33 @@ class AuthService:
         except ValueError:
             return False
         check = hashlib.sha256(f"{salt}:{password}".encode("utf-8")).hexdigest()
+        return secrets.compare_digest(check, digest)
+
+    def _prepare_security_questions(self, responses: list[tuple[str, str]]) -> list[dict[str, str]]:
+        cleaned: list[dict[str, str]] = []
+        for question, answer in responses:
+            q = question.strip()
+            a = answer.strip()
+            if not q or not a:
+                raise ValueError("Security questions and answers are required.")
+            cleaned.append({"question": q, "answer_hash": self._hash_answer(a)})
+        if len(cleaned) != 3:
+            raise ValueError("Please provide exactly three security questions and answers.")
+        return cleaned
+
+    def _hash_answer(self, answer: str) -> str:
+        normalized = answer.strip().lower()
+        salt = secrets.token_hex(8)
+        digest = hashlib.sha256(f"{salt}:{normalized}".encode("utf-8")).hexdigest()
+        return f"{salt}${digest}"
+
+    def _verify_answer(self, answer: str, stored: str) -> bool:
+        if not stored:
+            return False
+        try:
+            salt, digest = stored.split("$", 1)
+        except ValueError:
+            return False
+        normalized = answer.strip().lower()
+        check = hashlib.sha256(f"{salt}:{normalized}".encode("utf-8")).hexdigest()
         return secrets.compare_digest(check, digest)

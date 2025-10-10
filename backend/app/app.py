@@ -33,22 +33,41 @@ class TruckInspectionApp:
         return cls(database=database, auth=auth, inspections=inspections)
 
     def seed_defaults(self) -> None:
-        if not self.database.get_user_by_email("alex.ranger@example.com"):
+        default_alex_questions = [
+            ("What park was your first assignment?", "Rocky Ridge"),
+            ("What is your ranger call sign?", "Alpha-1"),
+            ("Favorite trail snack?", "Trail mix"),
+        ]
+        alex = self.database.get_user_by_email("alex.ranger@example.com")
+        if not alex:
             self.auth.register_user(
                 name="Alex Ranger",
                 email="alex.ranger@example.com",
                 password="rangerpass",
+                security_responses=default_alex_questions,
                 role=UserRole.RANGER,
                 ranger_number="RN-1001",
             )
-        if not self.database.get_user_by_email("sam.supervisor@example.com"):
+        elif not (alex.security_questions or []):
+            self.auth.set_security_questions("alex.ranger@example.com", default_alex_questions)
+
+        default_sam_questions = [
+            ("What year did you join the parks team?", "2012"),
+            ("Name of your first ranger partner?", "Jamie"),
+            ("Favorite lookout point?", "Eagle Rock"),
+        ]
+        sam = self.database.get_user_by_email("sam.supervisor@example.com")
+        if not sam:
             self.auth.register_user(
                 name="Sam Supervisor",
                 email="sam.supervisor@example.com",
                 password="supervisorpass",
+                security_responses=default_sam_questions,
                 role=UserRole.SUPERVISOR,
                 ranger_number="RN-2001",
             )
+        elif not (sam.security_questions or []):
+            self.auth.set_security_questions("sam.supervisor@example.com", default_sam_questions)
         truck_definitions = [
             ("SM88", None),
             ("P0106", None),

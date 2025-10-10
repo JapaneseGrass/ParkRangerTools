@@ -40,7 +40,8 @@ class Database:
                     password_hash TEXT NOT NULL,
                     role TEXT NOT NULL,
                     created_at TEXT NOT NULL,
-                    ranger_number TEXT
+                    ranger_number TEXT,
+                    security_questions TEXT
                 );
                 CREATE TABLE IF NOT EXISTS trucks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -93,6 +94,8 @@ class Database:
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
             if "ranger_number" not in columns:
                 conn.execute("ALTER TABLE users ADD COLUMN ranger_number TEXT")
+            if "security_questions" not in columns:
+                conn.execute("ALTER TABLE users ADD COLUMN security_questions TEXT")
             if "phone" in columns:
                 conn.execute(
                     "UPDATE users SET ranger_number = COALESCE(ranger_number, phone)"
@@ -121,13 +124,19 @@ class Database:
         password_hash: str,
         role: UserRole,
         ranger_number: Optional[str] = None,
+        security_questions: Optional[list[dict[str, str]]] = None,
     ) -> User:
         now = _utcnow()
         created_at = _format_datetime(now)
+        serialized_questions = json.dumps(security_questions or [])
         with self.session() as conn:
             cursor = conn.execute(
-                "INSERT INTO users (name, email, password_hash, role, created_at, ranger_number) VALUES (?, ?, ?, ?, ?, ?)",
-                (name, email, password_hash, role.value, created_at, ranger_number),
+                """
+                INSERT INTO users (
+                    name, email, password_hash, role, created_at, ranger_number, security_questions
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (name, email, password_hash, role.value, created_at, ranger_number, serialized_questions),
             )
             user_id = cursor.lastrowid
         return User(
@@ -138,6 +147,7 @@ class Database:
             role=role,
             created_at=now,
             ranger_number=ranger_number,
+            security_questions=security_questions or [],
         )
 
     def get_user_by_email(self, email: str) -> Optional[User]:
@@ -408,6 +418,18 @@ class Database:
                 (password_hash, user_id),
             )
 
+    def update_user_security_questions(self, user_id: int, security_questions: list[dict[str, str]]) -> User:
+        serialized = json.dumps(security_questions)
+        with self.session() as conn:
+            conn.execute(
+                "UPDATE users SET security_questions = ? WHERE id = ?",
+                (serialized, user_id),
+            )
+        user = self.get_user(user_id)
+        if not user:
+            raise LookupError("User not found")
+        return user
+
     def update_user_profile(self, user_id: int, name: str, ranger_number: Optional[str]) -> User:
         with self.session() as conn:
             conn.execute(
@@ -422,6 +444,8 @@ class Database:
 
 def _row_to_user(row: sqlite3.Row) -> User:
     ranger_number = row["ranger_number"] if "ranger_number" in row.keys() else None
+    questions_raw = row["security_questions"] if "security_questions" in row.keys() else None
+    security_questions = json.loads(questions_raw) if questions_raw else []
     return User(
         id=row["id"],
         name=row["name"],
@@ -430,6 +454,7 @@ def _row_to_user(row: sqlite3.Row) -> User:
         role=UserRole(row["role"]),
         created_at=_parse_datetime(row["created_at"]),
         ranger_number=ranger_number,
+        security_questions=security_questions,
     )
 
 
