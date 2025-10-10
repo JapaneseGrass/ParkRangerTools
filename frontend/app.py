@@ -335,7 +335,16 @@ class TruckInspectionWebApp:
         if user.role == UserRole.SUPERVISOR:
             trucks = self.service.list_trucks()
             active_assignments = {assignment.truck_id: assignment for assignment in self.service.list_active_assignments()}
-            content = self._render_supervisor_home(user, trucks, active_assignments, inspections)
+            supervisor_assignment = self.service.get_active_assignment_for_ranger(user)
+            supervisor_truck = self.service.get_truck(supervisor_assignment.truck_id) if supervisor_assignment else None
+            content = self._render_supervisor_home(
+                user,
+                trucks,
+                active_assignments,
+                inspections,
+                supervisor_assignment,
+                supervisor_truck,
+            )
         else:
             assignment = self.service.get_active_assignment_for_ranger(user)
             assignment_truck = self.service.get_truck(assignment.truck_id) if assignment else None
@@ -1096,6 +1105,11 @@ class TruckInspectionWebApp:
         active_assignments = {assignment.truck_id: assignment for assignment in self.service.list_active_assignments()}
         reservations = {reservation.truck_id: reservation for reservation in self.service.list_truck_reservations()}
         can_checkout = assignment is None
+        fleet_trucks = [
+            truck
+            for truck in trucks
+            if not (assignment and assignment.truck_id == truck.id)
+        ]
         fleet_cards = "".join(
             self._render_truck_card(
                 viewer=user,
@@ -1104,7 +1118,7 @@ class TruckInspectionWebApp:
                 reservation=reservations.get(truck.id),
                 allow_checkout=can_checkout,
             )
-            for truck in trucks
+            for truck in fleet_trucks
         )
         if not fleet_cards:
             fleet_cards = "<p class=\"muted\">No trucks configured.</p>"
@@ -1130,24 +1144,35 @@ class TruckInspectionWebApp:
         trucks: list[Truck],
         active_assignments: dict[int, TruckAssignment],
         inspections: list[dict[str, Any]],
+        assignment: Optional[TruckAssignment],
+        assignment_truck: Optional[Truck],
     ) -> str:
         reservations = {reservation.truck_id: reservation for reservation in self.service.list_truck_reservations()}
+        fleet_trucks = [
+            truck
+            for truck in trucks
+            if not (assignment and assignment.truck_id == truck.id)
+        ]
         cards = "".join(
             self._render_truck_card(
                 viewer=user,
                 truck=truck,
                 assignment=active_assignments.get(truck.id),
                 reservation=reservations.get(truck.id),
-                allow_checkout=reservations.get(truck.id) is None,
+                allow_checkout=reservations.get(truck.id) is None and active_assignments.get(truck.id) is None,
             )
-            for truck in trucks
+            for truck in fleet_trucks
         )
         if not cards:
             cards = "<p class=\"muted\">No trucks configured.</p>"
         inspections_html = self._render_inspection_table("All inspections", inspections)
+        assignment_html = ""
+        if assignment and assignment_truck:
+            assignment_html = self._render_assignment_card(assignment_truck, assignment)
         return f"""
         <section class=\"card\">
           <h1>Fleet overview</h1>
+          {assignment_html}
           <div class=\"grid\">{cards}</div>
         </section>
         {inspections_html}
