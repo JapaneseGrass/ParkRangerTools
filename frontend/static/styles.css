@@ -152,6 +152,13 @@ body.photo-viewer-open {
   margin-top: 0;
 }
 
+.actions .button,
+.actions .primary-action {
+  flex: 1 1 200px;
+  justify-content: center;
+  white-space: nowrap;
+}
+
 .reservation-note {
   font-size: 0.9rem;
   color: var(--accent-dark);
