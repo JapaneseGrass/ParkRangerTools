@@ -1190,7 +1190,7 @@ class TruckInspectionWebApp:
             status_messages.append(
                 f"Checked out by {assigned_label} since {assignment.checked_out_at.strftime('%Y-%m-%d %H:%M')}"
             )
-            if viewer.role == UserRole.SUPERVISOR or assignment.ranger_id == viewer.id:
+            if assignment.ranger_id == viewer.id:
                 return_url = (
                     f"/trucks/{truck.id}/inspect/{InspectionType.RETURN.value}?action=return&assignment={assignment.id}"
                 )

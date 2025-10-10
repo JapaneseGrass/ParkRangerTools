@@ -404,3 +404,53 @@ def test_reserve_truck(app: TruckInspectionApp) -> None:
     assignment = app.checkout_truck(ranger=ranger, truck=truck, inspection=inspection)
     assert assignment.truck_id == truck.id
     assert app.database.get_reservation_for_truck(truck.id) is None
+
+
+def test_supervisor_cannot_return_other_assignment(app: TruckInspectionApp) -> None:
+    supervisor = app.auth.register_user(
+        name="Supervisor Check",
+        email="super.check@example.com",
+        password="adminpass",
+        role=UserRole.SUPERVISOR,
+        ranger_number="RN-6101",
+        security_responses=[
+            ("Fav lookout?", "North Rim"),
+            ("Badge?", "77"),
+            ("Snack?", "Peanuts"),
+        ],
+    )
+    ranger = app.auth.register_user(
+        name="Return Owner",
+        email="owner@example.com",
+        password="ownerpass",
+        ranger_number="RN-5201",
+        security_responses=[
+            ("Camp?", "Lakeside"),
+            ("Trail?", "South"),
+            ("Snack?", "Gorp"),
+        ],
+    )
+    truck = app.list_trucks()[0]
+
+    checkout = app.submit_inspection(
+        user=ranger,
+        truck=truck,
+        inspection_type=InspectionType.QUICK,
+        responses={"odometer_miles": 1500, "truck_clean": "yes"},
+        photo_urls=[],
+    )
+    assignment = app.checkout_truck(ranger=ranger, truck=truck, inspection=checkout)
+
+    return_inspection = app.submit_inspection(
+        user=ranger,
+        truck=truck,
+        inspection_type=InspectionType.RETURN,
+        responses={"odometer_miles": 1510, "return_notes": "Ready"},
+        photo_urls=[],
+    )
+
+    with pytest.raises(PermissionError):
+        app.return_truck(assignment_id=assignment.id, ranger=supervisor, inspection=return_inspection)
+
+    completed = app.return_truck(assignment_id=assignment.id, ranger=ranger, inspection=return_inspection)
+    assert completed.returned_at is not None

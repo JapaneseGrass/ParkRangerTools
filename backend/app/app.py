@@ -196,7 +196,7 @@ class TruckInspectionApp:
             raise LookupError("Assignment not found")
         if assignment.returned_at is not None:
             raise ValueError("Truck has already been returned")
-        if assignment.ranger_id != ranger.id and ranger.role != UserRole.SUPERVISOR:
+        if assignment.ranger_id != ranger.id:
             raise PermissionError("You cannot return this truck")
         if assignment.truck_id != inspection.truck_id:
             raise ValueError("Inspection does not match the checked out truck")
