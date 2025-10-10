@@ -15,7 +15,15 @@ from urllib.parse import parse_qs, urlparse
 
 from backend.app.app import TruckInspectionApp
 from backend.app.forms import FieldType, get_form_definition
-from backend.app.models import Inspection, InspectionType, Truck, TruckAssignment, User, UserRole
+from backend.app.models import (
+    Inspection,
+    InspectionType,
+    Truck,
+    TruckAssignment,
+    TruckReservation,
+    User,
+    UserRole,
+)
 from backend.app.auth import ALLOWED_EMAIL_ROLES
 
 
@@ -274,6 +282,8 @@ class TruckInspectionWebApp:
             parts = request.path.strip("/").split("/")
             if len(parts) == 4 and parts[2] == "inspect":
                 return self._truck_inspection, {"truck_id": parts[1], "inspection_type": parts[3]}
+            if len(parts) == 3 and parts[2] == "reserve" and request.method == "POST":
+                return self._reserve_truck, {"truck_id": parts[1]}
         if request.path.startswith("/inspections/"):
             parts = request.path.strip("/").split("/")
             if len(parts) == 2 and request.method == "GET":
@@ -357,7 +367,7 @@ class TruckInspectionWebApp:
         return response
 
     def _register_get(self, request: Request) -> Response:
-        return self._page("Create account", None, self._render_register())
+        return self._page("Create account", None, self._render_register(), show_icons=False)
 
     def _register_post(self, request: Request) -> Response:
         name = (request.form_value("name") or "").strip()
@@ -383,6 +393,7 @@ class TruckInspectionWebApp:
                     ranger_number=ranger_number,
                     security_questions=security_questions,
                 ),
+                show_icons=False,
             )
         if not ranger_number:
             self._flash(request, "error", "Ranger number is required.")
@@ -395,6 +406,7 @@ class TruckInspectionWebApp:
                     ranger_number=ranger_number,
                     security_questions=security_questions,
                 ),
+                show_icons=False,
             )
         if password != confirm:
             self._flash(request, "error", "Passwords do not match.")
@@ -407,6 +419,7 @@ class TruckInspectionWebApp:
                     ranger_number=ranger_number,
                     security_questions=security_questions,
                 ),
+                show_icons=False,
             )
         try:
             role = backend_role_for_email(email)
@@ -429,6 +442,7 @@ class TruckInspectionWebApp:
                     ranger_number=ranger_number,
                     security_questions=security_questions,
                 ),
+                show_icons=False,
             )
         except Exception:
             self._flash(request, "error", "Unable to create account. The email may already be registered.")
@@ -456,7 +470,7 @@ class TruckInspectionWebApp:
                     questions = [entry.get("question", "") for entry in user.security_questions]
                 else:
                     self._flash(request, "error", "No account found for that email or security questions not set.")
-        return self._page("Update password", None, self._render_password(email=email, questions=questions))
+        return self._page("Update password", None, self._render_password(email=email, questions=questions), show_icons=False)
 
     def _password_post(self, request: Request) -> Response:
         email = (request.form_value("email") or "").strip()
@@ -467,15 +481,15 @@ class TruckInspectionWebApp:
         questions = stored_questions or None
         if not email or not password:
             self._flash(request, "error", "Email and new password are required.")
-            return self._page("Update password", None, self._render_password(email=email, questions=questions))
+            return self._page("Update password", None, self._render_password(email=email, questions=questions), show_icons=False)
         if password != confirm:
             self._flash(request, "error", "Passwords do not match.")
-            return self._page("Update password", None, self._render_password(email=email, questions=questions))
+            return self._page("Update password", None, self._render_password(email=email, questions=questions), show_icons=False)
         answers: list[str] = []
         if user:
             if not stored_questions:
                 self._flash(request, "error", "Security questions are not configured for this account.")
-                return self._page("Update password", None, self._render_password(email=email, questions=questions))
+                return self._page("Update password", None, self._render_password(email=email, questions=questions), show_icons=False)
             for idx in range(1, len(stored_questions) + 1):
                 answer = (request.form_value(f"security_answer_{idx}") or "").strip()
                 if not answer:
@@ -486,10 +500,10 @@ class TruckInspectionWebApp:
             self.service.auth.update_password(email=email, new_password=password, security_answers=answers)
         except ValueError as exc:
             self._flash(request, "error", str(exc))
-            return self._page("Update password", None, self._render_password(email=email, questions=questions))
+            return self._page("Update password", None, self._render_password(email=email, questions=questions), show_icons=False)
         except LookupError as exc:
             self._flash(request, "error", str(exc))
-            return self._page("Update password", None, self._render_password(email=email, questions=questions))
+            return self._page("Update password", None, self._render_password(email=email, questions=questions), show_icons=False)
         self._flash(request, "success", "Password updated. You can now sign in with the new password.")
         return self._redirect("/login")
 
@@ -741,6 +755,30 @@ class TruckInspectionWebApp:
             self._flash(request, "error", str(exc))
         return self._redirect(f"/inspections/{inspection.id}")
 
+    def _reserve_truck(self, request: Request, *, truck_id: str) -> Response:
+        user = self._current_user(request)
+        if not user:
+            return self._redirect("/login")
+        try:
+            truck = self.service.get_truck(int(truck_id))
+        except (ValueError, LookupError):
+            return self._not_found()
+        action = (request.form_value("reserve_action") or "reserve").strip().lower()
+        note = request.form_value("reserve_note") or ""
+        try:
+            if action == "cancel":
+                self.service.cancel_reservation(requester=user, truck=truck)
+                self._flash(request, "success", "Reservation cancelled.")
+            elif action == "update":
+                self.service.update_reservation_note(requester=user, truck=truck, note=note)
+                self._flash(request, "success", "Reservation note updated.")
+            else:
+                self.service.reserve_truck(requester=user, truck=truck, note=note)
+                self._flash(request, "success", "Reservation saved.")
+        except (PermissionError, ValueError) as exc:
+            self._flash(request, "error", str(exc))
+        return self._redirect("/")
+
     def _dashboard(self, request: Request) -> Response:
         user = self._current_user(request)
         if not user:
@@ -806,6 +844,21 @@ class TruckInspectionWebApp:
                 f'<span class="top-bar-icon" title="Truck {label} available">{profile["icon"]}</span>'
             )
         return "".join(icon_fragments)
+
+    def _reservation_default_for_user(self, user: Optional[User]) -> Optional[str]:
+        identifier = self._ranger_identifier(user)
+        return f"Reserved by {identifier}" if identifier else None
+
+    def _ranger_identifier(self, user: Optional[User], fallback_id: Optional[int] = None) -> Optional[str]:
+        if user:
+            number = (user.ranger_number or "").strip()
+            digits = "".join(ch for ch in number if ch.isdigit())
+            if digits:
+                suffix = digits[-2:] if len(digits) >= 2 else digits
+                return f"Ranger {suffix}"
+        if fallback_id is not None:
+            return f"Ranger {fallback_id}"
+        return "Ranger --"
 
     def _redirect(self, location: str) -> Response:
         response = Response(status=HTTPStatus.SEE_OTHER)
@@ -1041,12 +1094,14 @@ class TruckInspectionWebApp:
     ) -> str:
         trucks = self.service.list_trucks()
         active_assignments = {assignment.truck_id: assignment for assignment in self.service.list_active_assignments()}
+        reservations = {reservation.truck_id: reservation for reservation in self.service.list_truck_reservations()}
         can_checkout = assignment is None
         fleet_cards = "".join(
             self._render_truck_card(
                 viewer=user,
                 truck=truck,
                 assignment=active_assignments.get(truck.id),
+                reservation=reservations.get(truck.id),
                 allow_checkout=can_checkout,
             )
             for truck in trucks
@@ -1076,12 +1131,14 @@ class TruckInspectionWebApp:
         active_assignments: dict[int, TruckAssignment],
         inspections: list[dict[str, Any]],
     ) -> str:
+        reservations = {reservation.truck_id: reservation for reservation in self.service.list_truck_reservations()}
         cards = "".join(
             self._render_truck_card(
                 viewer=user,
                 truck=truck,
                 assignment=active_assignments.get(truck.id),
-                allow_checkout=True,
+                reservation=reservations.get(truck.id),
+                allow_checkout=reservations.get(truck.id) is None,
             )
             for truck in trucks
         )
@@ -1118,6 +1175,7 @@ class TruckInspectionWebApp:
         viewer: User,
         truck: Truck,
         assignment: Optional[TruckAssignment],
+        reservation: Optional[TruckReservation],
         *,
         allow_checkout: bool,
     ) -> str:
@@ -1125,15 +1183,12 @@ class TruckInspectionWebApp:
         graphic_class = f"truck-card__graphic truck-card__graphic--{profile['badge_class']}"
         icon_html = profile["icon"]
         actions: list[str] = []
-        status_text = ""
+        status_messages: list[str] = []
         if assignment:
             assigned_ranger = self.service.database.get_user(assignment.ranger_id)
-            assigned_label = (
-                assigned_ranger.name if assigned_ranger else f"Ranger #{assignment.ranger_id}"
-            )
-            status_text = (
-                f"Checked out by {assigned_label} since "
-                f"{assignment.checked_out_at.strftime('%Y-%m-%d %H:%M')}"
+            assigned_label = self._ranger_identifier(assigned_ranger, assignment.ranger_id)
+            status_messages.append(
+                f"Checked out by {assigned_label} since {assignment.checked_out_at.strftime('%Y-%m-%d %H:%M')}"
             )
             if viewer.role == UserRole.SUPERVISOR or assignment.ranger_id == viewer.id:
                 return_url = (
@@ -1153,16 +1208,60 @@ class TruckInspectionWebApp:
                     f'<a class="button secondary" href="{detailed_url}">Detailed inspection</a>'
                 )
             else:
-                status_text = "Return your current vehicle to check out another."
+                status_messages.append("Return your current vehicle to check out another.")
+
+        reservation_notice = ""
+        reservation_controls = ""
+        can_reserve = allow_checkout and assignment is None
+        if reservation:
+            reserved_user = self.service.database.get_user(reservation.user_id)
+            base_text = self._reservation_default_for_user(reserved_user)
+            if not base_text:
+                base_text = f"Reserved by {self._ranger_identifier(reserved_user, reservation.user_id)}"
+            message = html.escape(base_text)
+            default_note = self._reservation_default_for_user(reserved_user)
+            if reservation.note and not (default_note and reservation.note == default_note):
+                message += f' — "{html.escape(reservation.note)}"'
+            reservation_notice = f'<p class="reservation-note">{message}</p>'
+            if reservation.user_id == viewer.id:
+                current_note = ""
+                if reservation.note and not (default_note and reservation.note == default_note):
+                    current_note = reservation.note
+                note_value = html.escape(current_note)
+                reservation_controls = f"""
+                <div class=\"reserve-controls\">
+                  <form method=\"post\" action=\"/trucks/{truck.id}/reserve\" class=\"reserve-form\">
+                    <input type=\"hidden\" name=\"reserve_action\" value=\"update\" />
+                    <input type=\"text\" name=\"reserve_note\" maxlength=\"80\" value=\"{note_value}\" placeholder=\"Add a note (80 chars)\" />
+                    <button type=\"submit\" class=\"button secondary\">Save note</button>
+                  </form>
+                  <form method=\"post\" action=\"/trucks/{truck.id}/reserve\" class=\"reserve-trigger reserve-cancel\">
+                    <input type=\"hidden\" name=\"reserve_action\" value=\"cancel\" />
+                    <button type=\"submit\" class=\"button secondary\">Cancel reservation</button>
+                  </form>
+                </div>
+                """
+                can_reserve = False
+        elif can_reserve:
+            reservation_controls = f"""
+            <div class=\"reserve-controls\">
+              <form method=\"post\" action=\"/trucks/{truck.id}/reserve\" class=\"reserve-trigger\">
+                <input type=\"hidden\" name=\"reserve_action\" value=\"reserve\" />
+                <button type=\"submit\" class=\"button secondary\">Reserve</button>
+              </form>
+            </div>
+            """
 
         actions_html = ''.join(actions) if actions else ''
-        status_html = f'<p class="muted">{html.escape(status_text)}</p>' if status_text else ""
+        status_html = ''.join(f'<p class="muted">{html.escape(text)}</p>' for text in status_messages)
         return f"""
         <article class=\"card truck-card\">
           <div class=\"{graphic_class}\">{icon_html}</div>
           <h2>{html.escape(truck.identifier)}</h2>
           {status_html}
+          {reservation_notice}
           <div class=\"actions\">{actions_html}</div>
+          {reservation_controls}
         </article>
         """
 

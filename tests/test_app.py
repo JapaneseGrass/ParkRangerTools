@@ -331,3 +331,76 @@ def test_update_password(app: TruckInspectionApp) -> None:
     assert updated.ranger_number == "RN-4001"
     token = app.auth.authenticate("test@email.com", "newpass")
     assert token is not None
+
+
+def test_reserve_truck(app: TruckInspectionApp) -> None:
+    ranger = app.auth.register_user(
+        name="Reservation Ranger",
+        email="reserve@example.com",
+        password="securepass",
+        ranger_number="RN-5001",
+        security_responses=[
+            ("Go-to campsite?", "Lakeview"),
+            ("Favorite creek?", "Pine"),
+            ("Backup snack?", "Granola"),
+        ],
+    )
+    supervisor = app.auth.register_user(
+        name="Supervisor Reserve",
+        email="super.reserve@example.com",
+        password="superpass",
+        role=UserRole.SUPERVISOR,
+        ranger_number="RN-6001",
+        security_responses=[
+            ("Join year?", "2010"),
+            ("First district?", "North"),
+            ("Radio code?", "Bravo"),
+        ],
+    )
+    truck = app.list_trucks()[0]
+
+    default_reservation = app.reserve_truck(requester=ranger, truck=truck, note="")
+    digits = "".join(ch for ch in (ranger.ranger_number or "") if ch.isdigit())
+    suffix = digits[-2:] if len(digits) >= 2 else digits or "--"
+    assert default_reservation.note == f"Reserved by Ranger {suffix}"
+
+    reservation = app.update_reservation_note(requester=ranger, truck=truck, note="Hold for patrol")
+    assert reservation.truck_id == truck.id
+    assert reservation.user_id == ranger.id
+    assert reservation.note == "Hold for patrol"
+
+    with pytest.raises(ValueError):
+        app.update_reservation_note(requester=ranger, truck=truck, note="x" * 81)
+
+    other = app.auth.register_user(
+        name="Other Ranger",
+        email="other.reserve@example.com",
+        password="pass1234",
+        ranger_number="RN-5002",
+        security_responses=[
+            ("Fav park?", "Mesa"),
+            ("Trail?", "North Loop"),
+            ("Snack?", "Apple"),
+        ],
+    )
+    with pytest.raises(ValueError):
+        app.reserve_truck(requester=other, truck=truck, note="My turn")
+
+    with pytest.raises(PermissionError):
+        app.cancel_reservation(requester=supervisor, truck=truck)
+
+    app.cancel_reservation(requester=ranger, truck=truck)
+    assert app.database.get_reservation_for_truck(truck.id) is None
+
+    reservation_again = app.reserve_truck(requester=ranger, truck=truck, note="")
+    assert reservation_again.note == f"Reserved by Ranger {suffix}"
+    inspection = app.submit_inspection(
+        user=ranger,
+        truck=truck,
+        inspection_type=InspectionType.QUICK,
+        responses={"odometer_miles": 200, "truck_clean": "yes"},
+        photo_urls=[],
+    )
+    assignment = app.checkout_truck(ranger=ranger, truck=truck, inspection=inspection)
+    assert assignment.truck_id == truck.id
+    assert app.database.get_reservation_for_truck(truck.id) is None

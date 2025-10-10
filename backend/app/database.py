@@ -14,6 +14,7 @@ from .models import (
     SessionToken,
     Truck,
     TruckAssignment,
+    TruckReservation,
     User,
     UserRole,
 )
@@ -85,6 +86,14 @@ class Database:
                     end_miles INTEGER,
                     checked_out_at TEXT NOT NULL,
                     returned_at TEXT
+                );
+                CREATE TABLE IF NOT EXISTS truck_reservations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    truck_id INTEGER NOT NULL REFERENCES trucks(id) ON DELETE CASCADE,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    note TEXT,
+                    reserved_at TEXT NOT NULL,
+                    UNIQUE(truck_id)
                 );
                 CREATE INDEX IF NOT EXISTS idx_truck_assignments_active
                     ON truck_assignments(truck_id)
@@ -411,6 +420,46 @@ class Database:
         for row in rows:
             yield _row_to_assignment(row)
 
+    def add_or_update_reservation(
+        self,
+        *,
+        truck_id: int,
+        user_id: int,
+        note: Optional[str],
+    ) -> TruckReservation:
+        now = _utcnow()
+        reserved_at = _format_datetime(now)
+        with self.session() as conn:
+            conn.execute(
+                """
+                INSERT INTO truck_reservations (truck_id, user_id, note, reserved_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(truck_id) DO UPDATE SET
+                    user_id = excluded.user_id,
+                    note = excluded.note,
+                    reserved_at = excluded.reserved_at
+                """,
+                (truck_id, user_id, note, reserved_at),
+            )
+        reservation = self.get_reservation_for_truck(truck_id)
+        assert reservation is not None
+        return reservation
+
+    def delete_reservation_for_truck(self, truck_id: int) -> None:
+        with self.session() as conn:
+            conn.execute("DELETE FROM truck_reservations WHERE truck_id = ?", (truck_id,))
+
+    def get_reservation_for_truck(self, truck_id: int) -> Optional[TruckReservation]:
+        with self.session() as conn:
+            row = conn.execute("SELECT * FROM truck_reservations WHERE truck_id = ?", (truck_id,)).fetchone()
+        return _row_to_reservation(row) if row else None
+
+    def list_reservations(self) -> Iterable[TruckReservation]:
+        with self.session() as conn:
+            rows = conn.execute("SELECT * FROM truck_reservations").fetchall()
+        for row in rows:
+            yield _row_to_reservation(row)
+
     def update_user_password(self, user_id: int, password_hash: str) -> None:
         with self.session() as conn:
             conn.execute(
@@ -455,6 +504,16 @@ def _row_to_user(row: sqlite3.Row) -> User:
         created_at=_parse_datetime(row["created_at"]),
         ranger_number=ranger_number,
         security_questions=security_questions,
+    )
+
+
+def _row_to_reservation(row: sqlite3.Row) -> TruckReservation:
+    return TruckReservation(
+        id=row["id"],
+        truck_id=row["truck_id"],
+        user_id=row["user_id"],
+        note=row["note"],
+        reserved_at=_parse_datetime(row["reserved_at"]),
     )
 
 

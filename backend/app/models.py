@@ -79,3 +79,12 @@ class TruckAssignment:
     end_miles: Optional[int]
     checked_out_at: datetime
     returned_at: Optional[datetime]
+
+
+@dataclass
+class TruckReservation:
+    id: int
+    truck_id: int
+    user_id: int
+    note: Optional[str]
+    reserved_at: datetime

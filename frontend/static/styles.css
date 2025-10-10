@@ -152,6 +152,64 @@ body.photo-viewer-open {
   margin-top: 0;
 }
 
+.reservation-note {
+  font-size: 0.9rem;
+  color: var(--accent-dark);
+  margin: 0.3rem 0 0;
+  text-align: center;
+}
+
+.reserve-controls {
+  margin-top: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.reserve-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.reserve-form input[type="text"] {
+  flex: 1 1 220px;
+  min-width: 180px;
+  padding: 0.5rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #fbfaf7;
+}
+
+.reserve-form button,
+.reserve-trigger .button {
+  padding: 0.45rem 1.2rem;
+  min-height: 2.4rem;
+  font-size: 0.95rem;
+  box-shadow: none;
+}
+
+.reserve-form button:hover,
+.reserve-form button:focus {
+  transform: none;
+}
+
+.reserve-trigger {
+  margin-top: 0;
+}
+
+.reserve-trigger .button {
+  background: rgba(47, 107, 60, 0.08);
+  border: 1px solid rgba(47, 107, 60, 0.2);
+  color: var(--primary);
+}
+
+.reserve-trigger .button:hover,
+.reserve-trigger .button:focus {
+  background: rgba(47, 107, 60, 0.14);
+  transform: none;
+}
+
 .button,
 .primary-action {
   display: inline-flex;

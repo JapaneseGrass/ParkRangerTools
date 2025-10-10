@@ -13,6 +13,7 @@ from .models import (
     InspectionType,
     Truck,
     TruckAssignment,
+    TruckReservation,
     User,
     UserRole,
 )
@@ -174,12 +175,14 @@ class TruckInspectionApp:
         if self.database.get_active_assignment_for_truck(truck.id):
             raise ValueError("Truck is already checked out")
         start_miles = self._extract_odometer(inspection)
-        return self.database.add_assignment(
+        assignment = self.database.add_assignment(
             truck_id=truck.id,
             ranger_id=ranger.id,
             start_inspection_id=inspection.id,
             start_miles=start_miles,
         )
+        self.database.delete_reservation_for_truck(truck.id)
+        return assignment
 
     def return_truck(
         self,
@@ -205,6 +208,76 @@ class TruckInspectionApp:
             end_inspection_id=inspection.id,
             end_miles=end_miles,
         )
+
+    # Reservation operations
+    def reserve_truck(
+        self,
+        *,
+        requester: User,
+        truck: Truck,
+        note: Optional[str],
+    ) -> TruckReservation:
+        if self.database.get_active_assignment_for_truck(truck.id):
+            raise ValueError("Truck is currently checked out and cannot be reserved.")
+        existing = self.database.get_reservation_for_truck(truck.id)
+        if existing and existing.user_id != requester.id and requester.role != UserRole.SUPERVISOR:
+            raise ValueError("Truck already has a reservation.")
+        clean_note = (note or "").strip()
+        if len(clean_note) > 80:
+            raise ValueError("Reservation note must be 80 characters or fewer.")
+        if not clean_note:
+            clean_note = self._default_reservation_note(requester)
+        return self.database.add_or_update_reservation(
+            truck_id=truck.id,
+            user_id=requester.id,
+            note=clean_note or None,
+        )
+
+    def cancel_reservation(
+        self,
+        *,
+        requester: User,
+        truck: Truck,
+    ) -> None:
+        reservation = self.database.get_reservation_for_truck(truck.id)
+        if not reservation:
+            raise ValueError("No reservation exists for this truck.")
+        if reservation.user_id != requester.id:
+            raise PermissionError("You cannot cancel another ranger's reservation.")
+        self.database.delete_reservation_for_truck(truck.id)
+
+    def list_truck_reservations(self) -> list[TruckReservation]:
+        return list(self.database.list_reservations())
+
+    def update_reservation_note(
+        self,
+        *,
+        requester: User,
+        truck: Truck,
+        note: Optional[str],
+    ) -> TruckReservation:
+        reservation = self.database.get_reservation_for_truck(truck.id)
+        if not reservation:
+            raise ValueError("No reservation exists for this truck.")
+        if reservation.user_id != requester.id:
+            raise PermissionError("You cannot update another ranger's reservation.")
+        clean_note = (note or "").strip()
+        if len(clean_note) > 80:
+            raise ValueError("Reservation note must be 80 characters or fewer.")
+        owner = self.database.get_user(reservation.user_id) or requester
+        if not clean_note:
+            clean_note = self._default_reservation_note(owner)
+        return self.database.add_or_update_reservation(
+            truck_id=truck.id,
+            user_id=reservation.user_id,
+            note=clean_note,
+        )
+
+    def _default_reservation_note(self, user: User) -> str:
+        number = (user.ranger_number or "").strip()
+        digits = "".join(ch for ch in number if ch.isdigit())
+        suffix = digits[-2:] if len(digits) >= 2 else digits or "--"
+        return f"Reserved by Ranger {suffix}"
 
     @staticmethod
     def _extract_odometer(inspection: Inspection) -> int:
