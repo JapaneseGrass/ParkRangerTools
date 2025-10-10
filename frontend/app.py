@@ -329,8 +329,7 @@ class TruckInspectionWebApp:
         else:
             assignment = self.service.get_active_assignment_for_ranger(user)
             assignment_truck = self.service.get_truck(assignment.truck_id) if assignment else None
-            available_trucks = self.service.list_available_trucks()
-            content = self._render_ranger_home(user, available_trucks, assignment, assignment_truck, inspections)
+            content = self._render_ranger_home(user, assignment, assignment_truck, inspections)
         page_title = "Ranger Home" if user.role == UserRole.RANGER else "Home"
         return self._page(page_title, user, content)
 
@@ -1036,14 +1035,24 @@ class TruckInspectionWebApp:
     def _render_ranger_home(
         self,
         user: User,
-        available_trucks: list[Truck],
         assignment: Optional[TruckAssignment],
         assignment_truck: Optional[Truck],
         inspections: list[dict[str, Any]],
     ) -> str:
-        available_cards = "".join(self._render_available_truck_card(truck) for truck in available_trucks)
-        if not available_cards:
-            available_cards = "<p class=\"muted\">No trucks available right now.</p>"
+        trucks = self.service.list_trucks()
+        active_assignments = {assignment.truck_id: assignment for assignment in self.service.list_active_assignments()}
+        can_checkout = assignment is None
+        fleet_cards = "".join(
+            self._render_truck_card(
+                viewer=user,
+                truck=truck,
+                assignment=active_assignments.get(truck.id),
+                allow_checkout=can_checkout,
+            )
+            for truck in trucks
+        )
+        if not fleet_cards:
+            fleet_cards = "<p class=\"muted\">No trucks configured.</p>"
 
         assignment_html = ""
         if assignment and assignment_truck:
@@ -1055,7 +1064,7 @@ class TruckInspectionWebApp:
           <h1>Welcome, {html.escape(user.name)}!</h1>
           <p>Select an available truck to check out or return your current vehicle.</p>
           {assignment_html}
-          <div class=\"grid\">{available_cards}</div>
+          <div class=\"grid\">{fleet_cards}</div>
         </section>
         {inspections_html}
         """
@@ -1067,7 +1076,15 @@ class TruckInspectionWebApp:
         active_assignments: dict[int, TruckAssignment],
         inspections: list[dict[str, Any]],
     ) -> str:
-        cards = "".join(self._render_supervisor_truck_card(truck, active_assignments.get(truck.id)) for truck in trucks)
+        cards = "".join(
+            self._render_truck_card(
+                viewer=user,
+                truck=truck,
+                assignment=active_assignments.get(truck.id),
+                allow_checkout=True,
+            )
+            for truck in trucks
+        )
         if not cards:
             cards = "<p class=\"muted\">No trucks configured.</p>"
         inspections_html = self._render_inspection_table("All inspections", inspections)
@@ -1077,23 +1094,6 @@ class TruckInspectionWebApp:
           <div class=\"grid\">{cards}</div>
         </section>
         {inspections_html}
-        """
-
-    def _render_available_truck_card(self, truck: Truck) -> str:
-        profile = self._truck_profile(truck)
-        graphic_class = f"truck-card__graphic truck-card__graphic--{profile['badge_class']}"
-        icon_html = profile["icon"]
-        quick_url = f"/trucks/{truck.id}/inspect/{InspectionType.QUICK.value}?action=checkout"
-        detailed_url = f"/trucks/{truck.id}/inspect/{InspectionType.DETAILED.value}?action=checkout"
-        return f"""
-        <article class=\"card truck-card\">
-          <div class=\"{graphic_class}\">{icon_html}</div>
-          <h2>{html.escape(truck.identifier)}</h2>
-          <div class=\"actions\">
-            <a class=\"button\" href=\"{quick_url}\">Check out (Quick)</a>
-            <a class=\"button secondary\" href=\"{detailed_url}\">Check out (Detailed)</a>
-          </div>
-        </article>
         """
 
     def _render_assignment_card(self, truck: Truck, assignment: TruckAssignment) -> str:
@@ -1113,28 +1113,55 @@ class TruckInspectionWebApp:
         </article>
         """
 
-    def _render_supervisor_truck_card(self, truck: Truck, assignment: Optional[TruckAssignment]) -> str:
+    def _render_truck_card(
+        self,
+        viewer: User,
+        truck: Truck,
+        assignment: Optional[TruckAssignment],
+        *,
+        allow_checkout: bool,
+    ) -> str:
         profile = self._truck_profile(truck)
         graphic_class = f"truck-card__graphic truck-card__graphic--{profile['badge_class']}"
         icon_html = profile["icon"]
-        actions = []
-        status = "Available"
+        actions: list[str] = []
+        status_text = ""
         if assignment:
-            status = f"Checked out by ranger #{assignment.ranger_id} since {assignment.checked_out_at.strftime('%Y-%m-%d %H:%M')}"
-            return_url = f"/trucks/{truck.id}/inspect/{InspectionType.RETURN.value}?action=return&assignment={assignment.id}"
-            actions.append(f'<a class="button" href="{return_url}">Return vehicle</a>')
+            assigned_ranger = self.service.database.get_user(assignment.ranger_id)
+            assigned_label = (
+                assigned_ranger.name if assigned_ranger else f"Ranger #{assignment.ranger_id}"
+            )
+            status_text = (
+                f"Checked out by {assigned_label} since "
+                f"{assignment.checked_out_at.strftime('%Y-%m-%d %H:%M')}"
+            )
+            if viewer.role == UserRole.SUPERVISOR or assignment.ranger_id == viewer.id:
+                return_url = (
+                    f"/trucks/{truck.id}/inspect/{InspectionType.RETURN.value}?action=return&assignment={assignment.id}"
+                )
+                actions.append(f'<a class="button" href="{return_url}">Return vehicle</a>')
         else:
-            quick_url = f"/trucks/{truck.id}/inspect/{InspectionType.QUICK.value}?action=checkout"
-            detailed_url = f"/trucks/{truck.id}/inspect/{InspectionType.DETAILED.value}?action=checkout"
-            actions.append(f'<a class="button" href="{quick_url}">Quick inspection</a>')
-            actions.append(f'<a class="button secondary" href="{detailed_url}">Detailed inspection</a>')
+            if allow_checkout:
+                quick_url = (
+                    f"/trucks/{truck.id}/inspect/{InspectionType.QUICK.value}?action=checkout"
+                )
+                detailed_url = (
+                    f"/trucks/{truck.id}/inspect/{InspectionType.DETAILED.value}?action=checkout"
+                )
+                actions.append(f'<a class="button" href="{quick_url}">Quick inspection</a>')
+                actions.append(
+                    f'<a class="button secondary" href="{detailed_url}">Detailed inspection</a>'
+                )
+            else:
+                status_text = "Return your current vehicle to check out another."
 
         actions_html = ''.join(actions) if actions else ''
+        status_html = f'<p class="muted">{html.escape(status_text)}</p>' if status_text else ""
         return f"""
         <article class=\"card truck-card\">
           <div class=\"{graphic_class}\">{icon_html}</div>
           <h2>{html.escape(truck.identifier)}</h2>
-          <p class=\"muted\">{html.escape(status)}</p>
+          {status_html}
           <div class=\"actions\">{actions_html}</div>
         </article>
         """
