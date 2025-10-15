@@ -28,14 +28,14 @@ def seeded_app(app: TruckInspectionApp) -> TruckInspectionApp:
 
 @pytest.fixture()
 def ranger(seeded_app: TruckInspectionApp) -> User:
-    user = seeded_app.database.get_user_by_email("alex.ranger@example.com")
+    user = seeded_app.database.get_user_by_email("ranger@email.com")
     assert user is not None
     return user
 
 
 @pytest.fixture()
 def supervisor(seeded_app: TruckInspectionApp) -> User:
-    user = seeded_app.database.get_user_by_email("sam.supervisor@example.com")
+    user = seeded_app.database.get_user_by_email("supervisor@email.com")
     assert user is not None
     return user
 

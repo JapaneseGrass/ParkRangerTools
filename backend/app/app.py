@@ -34,41 +34,41 @@ class TruckInspectionApp:
         return cls(database=database, auth=auth, inspections=inspections)
 
     def seed_defaults(self) -> None:
-        default_alex_questions = [
+        default_ranger_questions = [
             ("What park was your first assignment?", "Rocky Ridge"),
             ("What is your ranger call sign?", "Alpha-1"),
             ("Favorite trail snack?", "Trail mix"),
         ]
-        alex = self.database.get_user_by_email("alex.ranger@example.com")
-        if not alex:
+        ranger_user = self.database.get_user_by_email("ranger@email.com")
+        if not ranger_user:
             self.auth.register_user(
-                name="Alex Ranger",
-                email="alex.ranger@example.com",
-                password="rangerpass",
-                security_responses=default_alex_questions,
+                name="Sample Ranger",
+                email="ranger@email.com",
+                password="password",
+                security_responses=default_ranger_questions,
                 role=UserRole.RANGER,
                 ranger_number="RN-1001",
             )
-        elif not (alex.security_questions or []):
-            self.auth.set_security_questions("alex.ranger@example.com", default_alex_questions)
+        elif not (ranger_user.security_questions or []):
+            self.auth.set_security_questions("ranger@email.com", default_ranger_questions)
 
-        default_sam_questions = [
+        default_supervisor_questions = [
             ("What year did you join the parks team?", "2012"),
             ("Name of your first ranger partner?", "Jamie"),
             ("Favorite lookout point?", "Eagle Rock"),
         ]
-        sam = self.database.get_user_by_email("sam.supervisor@example.com")
-        if not sam:
+        supervisor = self.database.get_user_by_email("supervisor@email.com")
+        if not supervisor:
             self.auth.register_user(
-                name="Sam Supervisor",
-                email="sam.supervisor@example.com",
-                password="supervisorpass",
-                security_responses=default_sam_questions,
+                name="Sample Supervisor",
+                email="supervisor@email.com",
+                password="password",
+                security_responses=default_supervisor_questions,
                 role=UserRole.SUPERVISOR,
                 ranger_number="RN-2001",
             )
-        elif not (sam.security_questions or []):
-            self.auth.set_security_questions("sam.supervisor@example.com", default_sam_questions)
+        elif not (supervisor.security_questions or []):
+            self.auth.set_security_questions("supervisor@email.com", default_supervisor_questions)
         truck_definitions = [
             ("SM88", None),
             ("P0106", None),
@@ -294,6 +294,6 @@ if __name__ == "__main__":  # pragma: no cover - manual interaction helper
     app = TruckInspectionApp.create(Path("truck_inspections.db"))
     app.seed_defaults()
     print("Truck Inspection App ready.")
-    print("Default ranger login: alex.ranger@example.com / rangerpass")
-    print("Default supervisor login: sam.supervisor@example.com / supervisorpass")
+    print("Default ranger login: ranger@email.com / password")
+    print("Default supervisor login: supervisor@email.com / password")
     print("Use this module within Python to interact with services programmatically.")

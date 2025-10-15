@@ -97,15 +97,15 @@ def login(client: FrontendClient, email: str, password: str):
 
 
 def test_ranger_login_and_dashboard(client: FrontendClient):
-    response = login(client, "alex.ranger@example.com", "rangerpass")
-    assert "Welcome, Alex Ranger!" in response.body
+    response = login(client, "ranger@email.com", "password")
+    assert "Welcome, Sample Ranger!" in response.body
     assert "Check out (Quick)" in response.body
 
 
 def test_submit_quick_inspection(app, client: FrontendClient):
-    login(client, "alex.ranger@example.com", "rangerpass")
+    login(client, "ranger@email.com", "password")
     service = app.service
-    user = service.database.get_user_by_email("alex.ranger@example.com")
+    user = service.database.get_user_by_email("ranger@email.com")
     assert user is not None
     truck = service.list_trucks()[0]
 
@@ -154,16 +154,16 @@ def test_submit_quick_inspection(app, client: FrontendClient):
 
 
 def test_supervisor_dashboard(client: FrontendClient):
-    login(client, "sam.supervisor@example.com", "supervisorpass")
+    login(client, "supervisor@email.com", "password")
     response = client.request("GET", "/dashboard")
     assert response.status == HTTPStatus.OK
     assert "Supervisor dashboard" in response.body
 
 
 def test_incomplete_inspection_preserves_form(app, client: FrontendClient):
-    login(client, "alex.ranger@example.com", "rangerpass")
+    login(client, "ranger@email.com", "password")
     service = app.service
-    user = service.database.get_user_by_email("alex.ranger@example.com")
+    user = service.database.get_user_by_email("ranger@email.com")
     assert user is not None
     truck = service.list_trucks()[0]
 
@@ -198,9 +198,9 @@ def test_incomplete_inspection_preserves_form(app, client: FrontendClient):
 
 
 def test_ranger_can_return_truck(app, client: FrontendClient):
-    login(client, "alex.ranger@example.com", "rangerpass")
+    login(client, "ranger@email.com", "password")
     service = app.service
-    user = service.database.get_user_by_email("alex.ranger@example.com")
+    user = service.database.get_user_by_email("ranger@email.com")
     assert user is not None
     truck = service.list_trucks()[0]
 
@@ -297,7 +297,7 @@ def test_register_and_password_update(app, client: FrontendClient):
 
 
 def test_account_update(app, client: FrontendClient):
-    login(client, "alex.ranger@example.com", "rangerpass")
+    login(client, "ranger@email.com", "password")
     response = client.request(
         "POST",
         "/account",
@@ -311,7 +311,7 @@ def test_account_update(app, client: FrontendClient):
     )
     assert "Account details updated" in response.body
 
-    updated = app.service.database.get_user_by_email("alex.ranger@example.com")
+    updated = app.service.database.get_user_by_email("ranger@email.com")
     assert updated is not None
     assert updated.name == "Alex Updated"
     assert updated.ranger_number == "RN-1001"
@@ -320,18 +320,18 @@ def test_account_update(app, client: FrontendClient):
     relog = client.request(
         "POST",
         "/login",
-        data={"email": "alex.ranger@example.com", "password": "newpass123"},
+        data={"email": "ranger@email.com", "password": "newpass123"},
         follow_redirects=True,
     )
     assert "Welcome, Alex Updated!" in relog.body
 
 
 def test_supervisor_can_submit_inspection(app, client: FrontendClient):
-    response = login(client, "sam.supervisor@example.com", "supervisorpass")
+    response = login(client, "supervisor@email.com", "password")
     assert "Quick inspection" in response.body
 
     service = app.service
-    user = service.database.get_user_by_email("sam.supervisor@example.com")
+    user = service.database.get_user_by_email("supervisor@email.com")
     assert user is not None
     truck = service.list_trucks()[0]
 

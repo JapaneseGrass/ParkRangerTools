@@ -10,10 +10,15 @@ from .database import Database
 from .models import SessionToken, User, UserRole
 
 ALLOWED_EMAIL_ROLES: dict[str, UserRole] = {
-    "alex.ranger@example.com": UserRole.RANGER,
-    "sam.supervisor@example.com": UserRole.SUPERVISOR,
+    "ranger@email.com": UserRole.RANGER,
+    "supervisor@email.com": UserRole.SUPERVISOR,
     "angel.rodriguezii@denvergov.org": UserRole.RANGER,
     "test@email.com": UserRole.RANGER,
+    "reserve@example.com": UserRole.RANGER,
+    "other.reserve@example.com": UserRole.RANGER,
+    "owner@example.com": UserRole.RANGER,
+    "super.reserve@example.com": UserRole.SUPERVISOR,
+    "super.check@example.com": UserRole.SUPERVISOR,
 }
 
 TOKEN_BYTES = 32

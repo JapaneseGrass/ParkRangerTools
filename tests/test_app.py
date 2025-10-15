@@ -74,14 +74,14 @@ def _photos() -> list[str]:
 
 
 def test_authentication_success(seeded_app: TruckInspectionApp) -> None:
-    token = seeded_app.auth.authenticate("alex.ranger@example.com", "rangerpass")
+    token = seeded_app.auth.authenticate("ranger@email.com", "password")
     assert token is not None
     delta = token.expires_at - token.created_at
     assert abs(delta - timedelta(minutes=TOKEN_EXPIRY_MINUTES)) < timedelta(seconds=1)
 
 
 def test_authentication_failure(seeded_app: TruckInspectionApp) -> None:
-    token = seeded_app.auth.authenticate("alex.ranger@example.com", "wrongpass")
+    token = seeded_app.auth.authenticate("ranger@email.com", "wrongpass")
     assert token is None
 
 
