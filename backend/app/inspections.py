@@ -4,9 +4,11 @@ import io
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Iterable, List, Optional
+from pathlib import Path
+from typing import Callable, Iterable, List, Optional
 
 from openpyxl import Workbook
+from openpyxl.drawing.image import Image
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
@@ -104,7 +106,12 @@ class InspectionService:
     def list_notes(self, inspection_id: int) -> List[InspectionNote]:
         return list(self.database.list_notes(inspection_id))
 
-    def export_inspections_workbook(self, *, generated_by: User) -> tuple[str, bytes]:
+    def export_inspections_workbook(
+        self,
+        *,
+        generated_by: User,
+        photo_resolver: Optional[Callable[[str], Optional[Path]]] = None,
+    ) -> tuple[str, bytes]:
         inspections = list(self.database.list_inspections())
         trucks = {
             truck_id: self.database.get_truck(truck_id)
@@ -209,6 +216,17 @@ class InspectionService:
             cell.font = header_font
             cell.alignment = Alignment(horizontal="center")
 
+        responses_ws = workbook.create_sheet("Responses")
+        responses_ws.append(["Inspection #", "Field", "Value", "Field type"])
+        for cell in responses_ws[1]:
+            cell.font = header_font
+
+        photos_ws = workbook.create_sheet("Photos")
+        photos_ws.append(["Inspection #", "Photo #", "Source", "Preview"])
+        for cell in photos_ws[1]:
+            cell.font = header_font
+        photo_row = 2
+
         for inspection in inspections:
             truck = trucks.get(inspection.truck_id)
             truck_label = truck.identifier if truck else f"Truck {inspection.truck_id}"
@@ -220,13 +238,29 @@ class InspectionService:
             attention_items: list[str] = []
             for field in get_form_definition(inspection.inspection_type):
                 value = responses.get(field.id)
+                display: str
                 if field.field_type is FieldType.BOOLEAN:
                     if field.id == "fluid_leak_detected" and value:
                         attention_items.append(field.label)
                     elif value is False:
                         attention_items.append(field.label)
+                    if value is None:
+                        display = ""
+                    else:
+                        display = "Yes" if value else "No"
                 elif field.field_type is FieldType.TEXT and field.id in {"notes", "return_notes"} and value:
                     attention_items.append(f"{field.label}: {value}")
+                    display = str(value)
+                else:
+                    display = "" if value is None else str(value)
+                responses_ws.append(
+                    [
+                        inspection.id,
+                        field.label,
+                        display,
+                        field.field_type.value,
+                    ]
+                )
             attention_text = ", ".join(attention_items)
 
             row = [
@@ -250,6 +284,35 @@ class InspectionService:
                 for cell in detail_ws[detail_ws.max_row]:
                     cell.fill = highlight
 
+            for index, photo_url in enumerate(inspection.photo_urls, start=1):
+                photos_ws.cell(row=photo_row, column=1, value=inspection.id)
+                photos_ws.cell(row=photo_row, column=2, value=index)
+                photos_ws.cell(row=photo_row, column=3, value=photo_url)
+                if photo_resolver:
+                    try:
+                        resolved = photo_resolver(photo_url)
+                    except Exception:
+                        resolved = None
+                    if resolved and resolved.exists():
+                        try:
+                            image = Image(str(resolved))
+                            max_width = 260
+                            if image.width and image.width > max_width:
+                                scale = max_width / image.width
+                                image.width = int(image.width * scale)
+                                image.height = int(image.height * scale)
+                            anchor = f"D{photo_row}"
+                            photos_ws.add_image(image, anchor)
+                            photos_ws.row_dimensions[photo_row].height = max(
+                                photos_ws.row_dimensions[photo_row].height or 0,
+                                image.height * 0.75,
+                            )
+                        except Exception:
+                            photos_ws.cell(row=photo_row, column=4, value="(Unsupported image)")
+                    else:
+                        photos_ws.cell(row=photo_row, column=4, value="(Missing file)")
+                photo_row += 1
+
         detail_ws.auto_filter.ref = detail_ws.dimensions
         detail_ws.freeze_panes = "A2"
 
@@ -260,6 +323,16 @@ class InspectionService:
                 default=10,
             )
             detail_ws.column_dimensions[column_letter].width = min(max(12, max_length + 2), 42)
+
+        responses_ws.column_dimensions[get_column_letter(1)].width = 16
+        responses_ws.column_dimensions[get_column_letter(2)].width = 36
+        responses_ws.column_dimensions[get_column_letter(3)].width = 40
+        responses_ws.column_dimensions[get_column_letter(4)].width = 14
+
+        photos_ws.column_dimensions[get_column_letter(1)].width = 16
+        photos_ws.column_dimensions[get_column_letter(2)].width = 12
+        photos_ws.column_dimensions[get_column_letter(3)].width = 48
+        photos_ws.column_dimensions[get_column_letter(4)].width = 40
 
         timestamp = now.strftime("%Y%m%d-%H%M%S")
         filename = f"inspection-export-{timestamp}.xlsx"

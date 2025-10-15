@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 import io
@@ -12,6 +13,10 @@ import pytest
 from backend.app.forms import FieldType, get_form_definition
 from backend.app.models import InspectionType
 from frontend.app import Request, create_app
+
+_SAMPLE_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAvoB9pWcVYoAAAAASUVORK5CYII="
+)
 from openpyxl import load_workbook
 
 
@@ -168,6 +173,11 @@ def test_supervisor_can_download_export(app, client: FrontendClient):
     ranger_user = service.database.get_user_by_email("ranger@email.com")
     assert ranger_user is not None
     truck = service.list_trucks()[0]
+    photo_urls: list[str] = []
+    for index in range(1, 5):
+        photo_path = app.upload_dir / f"export-preview-{index}.png"
+        photo_path.write_bytes(_SAMPLE_PNG)
+        photo_urls.append(f"/uploads/{photo_path.name}")
     service.submit_inspection(
         user=ranger_user,
         truck=truck,
@@ -180,7 +190,7 @@ def test_supervisor_can_download_export(app, client: FrontendClient):
             "fuel_level": "65",
             "odometer_miles": 1400,
         },
-        photo_urls=["photo1.jpg", "photo2.jpg", "photo3.jpg", "photo4.jpg"],
+        photo_urls=photo_urls,
         escalate_visibility=True,
     )
 
@@ -199,6 +209,8 @@ def test_supervisor_can_download_export(app, client: FrontendClient):
     assert "Quick" in types
     escalations = {detail.cell(row=row, column=6).value for row in range(2, detail.max_row + 1)}
     assert "Yes" in escalations
+    photos_ws = workbook["Photos"]
+    assert len(getattr(photos_ws, "_images", [])) >= 4
 
 
 def test_incomplete_inspection_preserves_form(app, client: FrontendClient):

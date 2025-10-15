@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import base64
 import inspect
 import io
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -32,6 +34,14 @@ def test_dataclasses_do_not_use_slots() -> None:
         not getattr(params, "slots", False) for params in dataclass_params
     ), "Dataclasses must not request slots for Python 3.9 compatibility"
 from backend.app.models import InspectionType, User, UserRole
+
+_SAMPLE_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAvoB9pWcVYoAAAAASUVORK5CYII="
+)
+
+
+def _write_sample_photo(path: Path) -> None:
+    path.write_bytes(_SAMPLE_PNG)
 
 
 def _quick_responses() -> dict[str, object]:
@@ -197,17 +207,25 @@ def test_supervisor_excel_export(
     supervisor: User,
     ranger: User,
     truck,
+    tmp_path: Path,
 ) -> None:
     detailed = _detailed_responses()
     detailed["seatbelts_functioning"] = False
     detailed["fluid_leak_detected"] = True
     detailed["notes"] = "Seatbelt frayed on driver side"
+    photo_dir = tmp_path / "photos"
+    photo_dir.mkdir()
+    photo_urls: list[str] = []
+    for index in range(1, 5):
+        path = photo_dir / f"inspection-{index}.png"
+        _write_sample_photo(path)
+        photo_urls.append(str(path))
     inspection = seeded_app.submit_inspection(
         user=ranger,
         truck=truck,
         inspection_type=InspectionType.DETAILED,
         responses=detailed,
-        photo_urls=_photos(),
+        photo_urls=photo_urls,
         escalate_visibility=True,
     )
     seeded_app.add_note(
@@ -224,7 +242,10 @@ def test_supervisor_excel_export(
         photo_urls=[],
     )
 
-    filename, payload = seeded_app.export_inspections(supervisor=supervisor)
+    filename, payload = seeded_app.export_inspections(
+        supervisor=supervisor,
+        photo_resolver=lambda url: Path(url) if Path(url).exists() else None,
+    )
     assert filename.startswith("inspection-export-")
     assert filename.endswith(".xlsx")
     workbook = load_workbook(io.BytesIO(payload))
@@ -262,6 +283,23 @@ def test_supervisor_excel_export(
     assert rows[return_inspection.id]["escalated"] == "No"
     assert rows[return_inspection.id]["notes"] == 0
     assert "Return notes" in rows[return_inspection.id]["attention"]
+
+    responses_ws = workbook["Responses"]
+    response_pairs = {
+        (responses_ws.cell(row=row, column=1).value, responses_ws.cell(row=row, column=2).value)
+        for row in range(2, responses_ws.max_row + 1)
+    }
+    assert (inspection.id, "Seatbelts functioning properly") in response_pairs
+    assert (inspection.id, "Notes section") in response_pairs
+
+    photos_ws = workbook["Photos"]
+    sources = {
+        photos_ws.cell(row=row, column=3).value
+        for row in range(2, photos_ws.max_row + 1)
+        if photos_ws.cell(row=row, column=3).value
+    }
+    assert photo_urls[0] in sources
+    assert len(getattr(photos_ws, "_images", [])) >= len(photo_urls)
 
 
 def test_ranger_only_sees_own_inspections(seeded_app: TruckInspectionApp, ranger: User, supervisor: User, truck) -> None:

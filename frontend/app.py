@@ -740,7 +740,23 @@ class TruckInspectionWebApp:
             return self._redirect("/login")
         if user.role != UserRole.SUPERVISOR:
             return self._not_found()
-        filename, payload = self.service.export_inspections(supervisor=user)
+        def resolve_photo(url: str) -> Optional[Path]:
+            raw = url.strip()
+            candidates: list[Path] = []
+            parsed = Path(raw)
+            if parsed.is_absolute():
+                candidates.append(parsed)
+            if raw.startswith("/uploads/"):
+                candidates.append(self.upload_dir / Path(raw).name)
+                candidates.append(self.upload_dir / raw.lstrip("/"))
+            else:
+                candidates.append(self.upload_dir / raw)
+            for candidate in candidates:
+                if candidate.exists():
+                    return candidate
+            return None
+
+        filename, payload = self.service.export_inspections(supervisor=user, photo_resolver=resolve_photo)
         response = Response(status=HTTPStatus.OK, body=payload)
         response.add_header(
             "Content-Type",

@@ -9,8 +9,9 @@ minimal web interface. Rangers can log in, choose a truck, capture or upload the
 required inspection photos, drag a fuel gauge to record fuel levels, answer the
 quick or detailed checklist, add optional notes, and escalate issues for
 supervisor visibility. Supervisors can sign in to review submissions, see
-basic compliance metrics, and export the full inspection archive to a
-two-tab Excel workbook for quick sharing.
+basic compliance metrics, and export the full inspection archive to an Excel
+workbook that includes summary metrics, every checklist response, and embedded
+photo evidence for quick sharing.
 
 ### Requirements
 

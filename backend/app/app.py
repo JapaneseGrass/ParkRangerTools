@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Callable, Iterable, List, Optional
 
 from .auth import AuthService
 from .database import Database
@@ -159,10 +159,18 @@ class TruckInspectionApp:
             raise PermissionError("Dashboard is available to supervisors only")
         return self.inspections.dashboard()
 
-    def export_inspections(self, *, supervisor: User) -> tuple[str, bytes]:
+    def export_inspections(
+        self,
+        *,
+        supervisor: User,
+        photo_resolver: Optional[Callable[[str], Optional[Path]]] = None,
+    ) -> tuple[str, bytes]:
         if supervisor.role != UserRole.SUPERVISOR:
             raise PermissionError("Only supervisors may export inspection data")
-        return self.inspections.export_inspections_workbook(generated_by=supervisor)
+        return self.inspections.export_inspections_workbook(
+            generated_by=supervisor,
+            photo_resolver=photo_resolver,
+        )
 
     def get_forms(self) -> dict[str, list[dict[str, object]]]:
         return self.inspections.list_forms()
