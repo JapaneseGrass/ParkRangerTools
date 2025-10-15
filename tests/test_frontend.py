@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from http import HTTPStatus
 from http.cookies import SimpleCookie
+import io
 import secrets
 from pathlib import Path
 from urllib.parse import urlencode
@@ -11,6 +12,7 @@ import pytest
 from backend.app.forms import FieldType, get_form_definition
 from backend.app.models import InspectionType
 from frontend.app import Request, create_app
+from openpyxl import load_workbook
 
 
 class FrontendClient:
@@ -158,6 +160,45 @@ def test_supervisor_dashboard(client: FrontendClient):
     response = client.request("GET", "/dashboard")
     assert response.status == HTTPStatus.OK
     assert "Supervisor dashboard" in response.body
+
+
+def test_supervisor_can_download_export(app, client: FrontendClient):
+    login(client, "supervisor@email.com", "password")
+    service = app.service
+    ranger_user = service.database.get_user_by_email("ranger@email.com")
+    assert ranger_user is not None
+    truck = service.list_trucks()[0]
+    service.submit_inspection(
+        user=ranger_user,
+        truck=truck,
+        inspection_type=InspectionType.QUICK,
+        responses={
+            "exterior_clean": True,
+            "interior_clean": False,
+            "seatbelts_functioning": True,
+            "tire_inflation": True,
+            "fuel_level": "65",
+            "odometer_miles": 1400,
+        },
+        photo_urls=["photo1.jpg", "photo2.jpg", "photo3.jpg", "photo4.jpg"],
+        escalate_visibility=True,
+    )
+
+    response = client.request("GET", "/inspections/export")
+    assert response.status == HTTPStatus.OK
+    headers = {name.lower(): value for name, value in response.headers}
+    assert headers.get("content-type") == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert "attachment" in headers.get("content-disposition", "")
+    assert isinstance(response.body, (bytes, bytearray))
+
+    workbook = load_workbook(io.BytesIO(response.body))
+    assert set(workbook.sheetnames) >= {"Summary", "Inspections"}
+    detail = workbook["Inspections"]
+    assert detail.max_row >= 2
+    types = {detail.cell(row=row, column=3).value for row in range(2, detail.max_row + 1)}
+    assert "Quick" in types
+    escalations = {detail.cell(row=row, column=6).value for row in range(2, detail.max_row + 1)}
+    assert "Yes" in escalations
 
 
 def test_incomplete_inspection_preserves_form(app, client: FrontendClient):

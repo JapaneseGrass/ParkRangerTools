@@ -6,7 +6,9 @@ requires-python = ">=3.9"
 authors = [
   { name = "Park Ranger Tools" }
 ]
-dependencies = []
+dependencies = [
+  "openpyxl>=3.1.2"
+]
 
 [project.optional-dependencies]
 dev = [

@@ -159,6 +159,11 @@ class TruckInspectionApp:
             raise PermissionError("Dashboard is available to supervisors only")
         return self.inspections.dashboard()
 
+    def export_inspections(self, *, supervisor: User) -> tuple[str, bytes]:
+        if supervisor.role != UserRole.SUPERVISOR:
+            raise PermissionError("Only supervisors may export inspection data")
+        return self.inspections.export_inspections_workbook(generated_by=supervisor)
+
     def get_forms(self) -> dict[str, list[dict[str, object]]]:
         return self.inspections.list_forms()
 

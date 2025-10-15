@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import inspect
+import io
 from datetime import datetime, timedelta
 
 import pytest
+
+from openpyxl import load_workbook
 
 from backend.app import TruckInspectionApp
 from backend.app.auth import TOKEN_EXPIRY_MINUTES
@@ -187,6 +190,78 @@ def test_dashboard_metrics(seeded_app: TruckInspectionApp, ranger: User, supervi
     supervisor_entry = next(entry for entry in metrics if entry["user"].id == supervisor.id)
     assert ranger_entry["inspections_completed"] == 1
     assert supervisor_entry["inspections_completed"] == 0
+
+
+def test_supervisor_excel_export(
+    seeded_app: TruckInspectionApp,
+    supervisor: User,
+    ranger: User,
+    truck,
+) -> None:
+    detailed = _detailed_responses()
+    detailed["seatbelts_functioning"] = False
+    detailed["fluid_leak_detected"] = True
+    detailed["notes"] = "Seatbelt frayed on driver side"
+    inspection = seeded_app.submit_inspection(
+        user=ranger,
+        truck=truck,
+        inspection_type=InspectionType.DETAILED,
+        responses=detailed,
+        photo_urls=_photos(),
+        escalate_visibility=True,
+    )
+    seeded_app.add_note(
+        requester=supervisor,
+        inspection=inspection,
+        content="Schedule maintenance review",
+    )
+
+    return_inspection = seeded_app.submit_inspection(
+        user=ranger,
+        truck=truck,
+        inspection_type=InspectionType.RETURN,
+        responses={"odometer_miles": 1300, "return_notes": "Left keys with dispatch"},
+        photo_urls=[],
+    )
+
+    filename, payload = seeded_app.export_inspections(supervisor=supervisor)
+    assert filename.startswith("inspection-export-")
+    assert filename.endswith(".xlsx")
+    workbook = load_workbook(io.BytesIO(payload))
+    assert set(workbook.sheetnames) >= {"Summary", "Inspections"}
+
+    summary = workbook["Summary"]
+    metrics: dict[str, object] = {}
+    for row in range(6, 12):
+        label = summary.cell(row=row, column=1).value
+        value = summary.cell(row=row, column=2).value
+        if label:
+            metrics[label] = value
+    assert metrics.get("Total inspections") == 2
+    assert metrics.get("Escalated inspections") == 1
+
+    detail = workbook["Inspections"]
+    rows: dict[int, dict[str, object]] = {}
+    for index in range(2, detail.max_row + 1):
+        inspection_id = detail.cell(row=index, column=1).value
+        if inspection_id is None:
+            continue
+        rows[inspection_id] = {
+            "escalated": detail.cell(row=index, column=6).value,
+            "notes": detail.cell(row=index, column=11).value,
+            "attention": detail.cell(row=index, column=12).value or "",
+        }
+
+    assert inspection.id in rows
+    assert rows[inspection.id]["escalated"] == "Yes"
+    assert rows[inspection.id]["notes"] == 1
+    assert "Seatbelt" in rows[inspection.id]["attention"]
+    assert "Fluid leaking" in rows[inspection.id]["attention"]
+
+    assert return_inspection.id in rows
+    assert rows[return_inspection.id]["escalated"] == "No"
+    assert rows[return_inspection.id]["notes"] == 0
+    assert "Return notes" in rows[return_inspection.id]["attention"]
 
 
 def test_ranger_only_sees_own_inspections(seeded_app: TruckInspectionApp, ranger: User, supervisor: User, truck) -> None:

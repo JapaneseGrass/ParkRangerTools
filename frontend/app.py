@@ -272,6 +272,7 @@ class TruckInspectionWebApp:
             ("GET", "/account"): self._account_get,
             ("POST", "/account"): self._account_post,
             ("GET", "/inspections"): self._inspection_list,
+            ("GET", "/inspections/export"): self._export_inspections,
             ("GET", "/dashboard"): self._dashboard,
         }
         handler = simple_routes.get((request.method, request.path))
@@ -733,6 +734,23 @@ class TruckInspectionWebApp:
         content = self._render_inspection_table("Inspections", inspections)
         return self._page("Inspections", user, content)
 
+    def _export_inspections(self, request: Request) -> Response:
+        user = self._current_user(request)
+        if not user:
+            return self._redirect("/login")
+        if user.role != UserRole.SUPERVISOR:
+            return self._not_found()
+        filename, payload = self.service.export_inspections(supervisor=user)
+        response = Response(status=HTTPStatus.OK, body=payload)
+        response.add_header(
+            "Content-Type",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        response.add_header("Content-Disposition", f'attachment; filename="{filename}"')
+        response.add_header("Cache-Control", "no-store")
+        response.add_header("Content-Length", str(len(payload)))
+        return response
+
     def _inspection_detail(self, request: Request, *, inspection_id: str) -> Response:
         user = self._current_user(request)
         if not user:
@@ -1165,7 +1183,7 @@ class TruckInspectionWebApp:
         )
         if not cards:
             cards = "<p class=\"muted\">No trucks configured.</p>"
-        inspections_html = self._render_inspection_table("All inspections", inspections)
+        inspections_html = self._render_inspection_table("All inspections", inspections, export_link=True)
         assignment_html = ""
         if assignment and assignment_truck:
             assignment_html = self._render_assignment_card(assignment_truck, assignment)
@@ -1293,14 +1311,33 @@ class TruckInspectionWebApp:
     def _render_truck_legend(self, trucks: list[Truck]) -> str:
         return ""
 
-    def _render_inspection_table(self, heading: str, inspections: list[dict[str, Any]]) -> str:
+    def _render_inspection_table(
+        self,
+        heading: str,
+        inspections: list[dict[str, Any]],
+        *,
+        export_link: bool = False,
+    ) -> str:
+        actions_html = ""
+        if export_link:
+            actions_html = (
+                '<div class="table-actions">'
+                '<div class="actions"><a class="button" href="/inspections/export">Download Excel export</a></div>'
+                '<p class="export-hint muted">Generates a workbook with summary insights and full inspection detail.</p>'
+                '</div>'
+            )
         if not inspections:
-            return f"<section class=\"card\"><h2>{html.escape(heading)}</h2><p class=\"muted\">No inspections recorded yet.</p></section>"
-        rows = []
+            return (
+                f'<section class="card"><h2>{html.escape(heading)}</h2>'
+                f'{actions_html}<p class="muted">No inspections recorded yet.</p></section>'
+            )
+        rows: list[str] = []
         for item in inspections:
             inspection = item["inspection"]
-            truck = item["truck"]
-            ranger = item["ranger"]
+            truck_obj = item.get("truck")
+            ranger_obj = item.get("ranger")
+            truck_label = html.escape(truck_obj.identifier) if truck_obj else f"Truck {inspection.truck_id}"
+            ranger_label = html.escape(ranger_obj.name) if ranger_obj else f"Ranger {inspection.ranger_id}"
             escalated = (
                 "<span class=\"badge badge-alert\">Escalated</span>"
                 if inspection.escalate_visibility
@@ -1320,18 +1357,20 @@ class TruckInspectionWebApp:
                 """.format(
                     id=inspection.id,
                     type=html.escape(inspection.inspection_type.value.title()),
-                    truck=html.escape(truck.identifier),
-                    ranger=html.escape(ranger.name),
+                    truck=truck_label,
+                    ranger=ranger_label,
                     created=inspection.created_at.strftime("%Y-%m-%d %H:%M"),
                     escalated=escalated,
                 )
             )
+        table_rows = "".join(rows)
         return f"""
         <section class=\"card\">
           <h2>{html.escape(heading)}</h2>
+          {actions_html}
           <table class=\"inspection-table\">
             <thead><tr><th>ID</th><th>Type</th><th>Truck</th><th>Ranger</th><th>Created</th><th>Escalated</th><th></th></tr></thead>
-            <tbody>{''.join(rows)}</tbody>
+            <tbody>{table_rows}</tbody>
           </table>
         </section>
         """
@@ -1600,7 +1639,7 @@ class TruckInspectionWebApp:
           <tbody>{rows}</tbody>
         </table>
         """.format(rows="".join(personnel_rows))
-        inspection_table = self._render_inspection_table("All inspections", inspections)
+        inspection_table = self._render_inspection_table("All inspections", inspections, export_link=True)
         return f"""
         <section class=\"card\">
           <h1>Supervisor dashboard</h1>

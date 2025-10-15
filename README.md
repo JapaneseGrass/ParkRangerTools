@@ -8,8 +8,9 @@ The MVP is a lightweight Python application that pairs a SQLite database with a
 minimal web interface. Rangers can log in, choose a truck, capture or upload the
 required inspection photos, drag a fuel gauge to record fuel levels, answer the
 quick or detailed checklist, add optional notes, and escalate issues for
-supervisor visibility. Supervisors can sign in to review submissions and see
-basic compliance metrics.
+supervisor visibility. Supervisors can sign in to review submissions, see
+basic compliance metrics, and export the full inspection archive to a
+two-tab Excel workbook for quick sharing.
 
 ### Requirements
 
@@ -17,8 +18,8 @@ basic compliance metrics.
 - `pip` (only required to install optional test dependencies)
 - macOS, Linux, or Windows capable of running Python 3.9+
 
-No third-party runtime libraries are required; the standard library powers both
-backend services and the web layer.
+The only runtime dependency is `openpyxl`, used to assemble the Excel export;
+everything else is handled with the Python standard library.
 
 ### Setup
 
