@@ -60,7 +60,7 @@ programmatically.
 Start the bundled WSGI server to explore the UI in a browser:
 
 ```bash
-python3 -m frontend.app
+python3 -m frontend.app --host 0.0.0.0 --port 8000
 ```
 
 Navigate to http://127.0.0.1:8000/ and sign in with one of the seeded accounts:
@@ -70,6 +70,9 @@ Navigate to http://127.0.0.1:8000/ and sign in with one of the seeded accounts:
 
 Uploaded photos are saved under `frontend/uploads/`, and the shared
 `truck_inspections.db` file keeps inspection history for both roles.
+
+Tip: When you bind to `0.0.0.0`, other devices on the same network (for example,
+a phone or tablet) can reach the app by browsing to `http://<your-mac-ip>:8000/`.
 
 Rangers now check out a vehicle before taking it into the field. A checkout triggers
 an inspection that records the starting mileage; the vehicle disappears from the
@@ -96,3 +99,16 @@ pytest
 The tests cover authentication, photo validation, inspection creation, follow-up
 note windows, and supervisor dashboard metrics using an isolated temporary
 database.
+
+### Generating mock data
+
+Need a fuller dataset for demos or manual QA? Seed the default database, then
+run the helper script to create realistic checkout/return pairs (each with photo
+evidence):
+
+```bash
+python3 -m backend.app.mock_data --pairs 60 --database truck_inspections.db
+```
+
+Adjust `--pairs` or point `--database` at another SQLite file to suit your
+environment.

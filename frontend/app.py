@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import html
 import mimetypes
 import secrets
@@ -119,14 +120,20 @@ class UploadedFile:
     content_type: str
     data: bytes
 
-@dataclass
 class Request:
-    method: str
-    target: str
-    headers: dict[str, str]
-    body: bytes = b""
+    def __init__(
+        self,
+        *,
+        method: str,
+        target: str,
+        headers: dict[str, str],
+        body: bytes = b"",
+    ) -> None:
+        self.method = method
+        self.target = target
+        self.headers = headers
+        self.body = body
 
-    def __post_init__(self) -> None:
         parsed = urlparse(self.target)
         self.path = parsed.path or "/"
         self.query = parse_qs(parsed.query)
@@ -1764,5 +1771,22 @@ def create_app(database_path: Optional[Path | str] = None) -> TruckInspectionWeb
 app = create_app()
 
 
+def main() -> None:  # pragma: no cover - convenience wrapper
+    parser = argparse.ArgumentParser(description="Run the Truck Inspection web app")
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Interface to bind (use 0.0.0.0 to allow other devices on the network)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port to listen on (default: 8000)",
+    )
+    args = parser.parse_args()
+    app.run(host=args.host, port=args.port)
+
+
 if __name__ == "__main__":  # pragma: no cover - manual execution helper
-    app.run()
+    main()
