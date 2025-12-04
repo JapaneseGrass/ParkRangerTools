@@ -83,7 +83,7 @@ If you just need a public demo link (data is ephemeral on redeploy), you can poi
 3. Build command: `pip install -r requirements.txt`
 4. Start command:
    ```
-   python frontend/app.py --host 0.0.0.0 --port $PORT
+   PYTHONPATH="$PYTHONPATH:/opt/render/project/src" python frontend/app.py --host 0.0.0.0 --port $PORT
    ```
 5. Deploy on the free plan; expect uploads/DB to reset when the service redeploys or sleeps.
 
