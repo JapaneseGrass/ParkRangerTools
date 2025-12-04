@@ -79,11 +79,13 @@ a phone or tablet) can reach the app by browsing to `http://<your-mac-ip>:8000/`
 If you just need a public demo link (data is ephemeral on redeploy), you can point Render at this repo:
 
 1. Keep the included `requirements.txt`.
-2. Create a Render Web Service (Python), leave the build command blank, and set the start command to:
+2. Create a Render Web Service (Python), leave Root Directory blank.
+3. Build command: `pip install -r requirements.txt`
+4. Start command:
    ```
    python frontend/app.py --host 0.0.0.0 --port $PORT
    ```
-3. Deploy on the free plan; expect uploads/DB to reset when the service redeploys or sleeps.
+5. Deploy on the free plan; expect uploads/DB to reset when the service redeploys or sleeps.
 
 Rangers now check out a vehicle before taking it into the field. A checkout triggers
 an inspection that records the starting mileage; the vehicle disappears from the
