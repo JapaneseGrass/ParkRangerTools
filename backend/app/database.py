@@ -13,6 +13,8 @@ from .models import (
     InspectionType,
     SessionToken,
     Truck,
+    TruckAssignment,
+    TruckReservation,
     User,
     UserRole,
 )
@@ -38,7 +40,9 @@ class Database:
                     email TEXT NOT NULL UNIQUE,
                     password_hash TEXT NOT NULL,
                     role TEXT NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    ranger_number TEXT,
+                    security_questions TEXT
                 );
                 CREATE TABLE IF NOT EXISTS trucks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,8 +76,39 @@ class Database:
                     created_at TEXT NOT NULL,
                     expires_at TEXT NOT NULL
                 );
-                """
-            )
+                CREATE TABLE IF NOT EXISTS truck_assignments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    truck_id INTEGER NOT NULL REFERENCES trucks(id),
+                    ranger_id INTEGER NOT NULL REFERENCES users(id),
+                    start_inspection_id INTEGER NOT NULL REFERENCES inspections(id),
+                    end_inspection_id INTEGER REFERENCES inspections(id),
+                    start_miles INTEGER NOT NULL,
+                    end_miles INTEGER,
+                    checked_out_at TEXT NOT NULL,
+                    returned_at TEXT
+                );
+                CREATE TABLE IF NOT EXISTS truck_reservations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    truck_id INTEGER NOT NULL REFERENCES trucks(id) ON DELETE CASCADE,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    note TEXT,
+                    reserved_at TEXT NOT NULL,
+                    UNIQUE(truck_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_truck_assignments_active
+                    ON truck_assignments(truck_id)
+                    WHERE returned_at IS NULL;
+            """
+        )
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
+            if "ranger_number" not in columns:
+                conn.execute("ALTER TABLE users ADD COLUMN ranger_number TEXT")
+            if "security_questions" not in columns:
+                conn.execute("ALTER TABLE users ADD COLUMN security_questions TEXT")
+            if "phone" in columns:
+                conn.execute(
+                    "UPDATE users SET ranger_number = COALESCE(ranger_number, phone)"
+                )
 
     @contextmanager
     def _connect(self) -> Generator[sqlite3.Connection, None, None]:
@@ -91,16 +126,38 @@ class Database:
             yield conn
 
     # User operations
-    def add_user(self, name: str, email: str, password_hash: str, role: UserRole) -> User:
+    def add_user(
+        self,
+        name: str,
+        email: str,
+        password_hash: str,
+        role: UserRole,
+        ranger_number: Optional[str] = None,
+        security_questions: Optional[list[dict[str, str]]] = None,
+    ) -> User:
         now = _utcnow()
         created_at = _format_datetime(now)
+        serialized_questions = json.dumps(security_questions or [])
         with self.session() as conn:
             cursor = conn.execute(
-                "INSERT INTO users (name, email, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)",
-                (name, email, password_hash, role.value, created_at),
+                """
+                INSERT INTO users (
+                    name, email, password_hash, role, created_at, ranger_number, security_questions
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (name, email, password_hash, role.value, created_at, ranger_number, serialized_questions),
             )
             user_id = cursor.lastrowid
-        return User(id=user_id, name=name, email=email, password_hash=password_hash, role=role, created_at=now)
+        return User(
+            id=user_id,
+            name=name,
+            email=email,
+            password_hash=password_hash,
+            role=role,
+            created_at=now,
+            ranger_number=ranger_number,
+            security_questions=security_questions or [],
+        )
 
     def get_user_by_email(self, email: str) -> Optional[User]:
         with self.session() as conn:
@@ -112,11 +169,20 @@ class Database:
             row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         return _row_to_user(row) if row else None
 
-    def list_rangers(self) -> Iterable[User]:
+    def list_users_by_roles(self, roles: Iterable[UserRole]) -> Iterable[User]:
+        role_list = list(roles)
+        if not role_list:
+            return []
+        placeholders = ",".join("?" for _ in role_list)
         with self.session() as conn:
-            rows = conn.execute("SELECT * FROM users WHERE role = ? ORDER BY name", (UserRole.RANGER.value,)).fetchall()
-        for row in rows:
-            yield _row_to_user(row)
+            rows = conn.execute(
+                f"SELECT * FROM users WHERE role IN ({placeholders}) ORDER BY name",
+                tuple(role.value for role in role_list),
+            ).fetchall()
+        return [_row_to_user(row) for row in rows]
+
+    def list_rangers(self) -> Iterable[User]:
+        return self.list_users_by_roles([UserRole.RANGER])
 
     # Truck operations
     def add_truck(self, identifier: str, description: Optional[str], active: bool = True) -> Truck:
@@ -274,8 +340,161 @@ class Database:
         with self.session() as conn:
             conn.execute("DELETE FROM session_tokens WHERE expires_at < ?", (_format_datetime(now),))
 
+    # Assignment operations
+    def add_assignment(
+        self,
+        *,
+        truck_id: int,
+        ranger_id: int,
+        start_inspection_id: int,
+        start_miles: int,
+    ) -> TruckAssignment:
+        now = _utcnow()
+        with self.session() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO truck_assignments (
+                    truck_id, ranger_id, start_inspection_id, start_miles, checked_out_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (truck_id, ranger_id, start_inspection_id, start_miles, _format_datetime(now)),
+            )
+            assignment_id = cursor.lastrowid
+        assignment = self.get_assignment(assignment_id)
+        assert assignment is not None
+        return assignment
+
+    def close_assignment(
+        self,
+        assignment_id: int,
+        *,
+        end_inspection_id: int,
+        end_miles: int,
+    ) -> TruckAssignment:
+        returned_at = _utcnow()
+        with self.session() as conn:
+            conn.execute(
+                """
+                UPDATE truck_assignments
+                SET end_inspection_id = ?, end_miles = ?, returned_at = ?
+                WHERE id = ?
+                """,
+                (end_inspection_id, end_miles, _format_datetime(returned_at), assignment_id),
+            )
+        assignment = self.get_assignment(assignment_id)
+        assert assignment is not None
+        return assignment
+
+    def get_assignment(self, assignment_id: int) -> Optional[TruckAssignment]:
+        with self.session() as conn:
+            row = conn.execute("SELECT * FROM truck_assignments WHERE id = ?", (assignment_id,)).fetchone()
+        return _row_to_assignment(row) if row else None
+
+    def get_active_assignment_for_truck(self, truck_id: int) -> Optional[TruckAssignment]:
+        with self.session() as conn:
+            row = conn.execute(
+                "SELECT * FROM truck_assignments WHERE truck_id = ? AND returned_at IS NULL",
+                (truck_id,),
+            ).fetchone()
+        return _row_to_assignment(row) if row else None
+
+    def get_active_assignment_for_ranger(self, ranger_id: int) -> Optional[TruckAssignment]:
+        with self.session() as conn:
+            row = conn.execute(
+                "SELECT * FROM truck_assignments WHERE ranger_id = ? AND returned_at IS NULL",
+                (ranger_id,),
+            ).fetchone()
+        return _row_to_assignment(row) if row else None
+
+    def list_active_assignments(self) -> Iterable[TruckAssignment]:
+        with self.session() as conn:
+            rows = conn.execute(
+                "SELECT * FROM truck_assignments WHERE returned_at IS NULL",
+            ).fetchall()
+        for row in rows:
+            yield _row_to_assignment(row)
+
+    def list_assignments(self) -> Iterable[TruckAssignment]:
+        with self.session() as conn:
+            rows = conn.execute("SELECT * FROM truck_assignments").fetchall()
+        for row in rows:
+            yield _row_to_assignment(row)
+
+    def add_or_update_reservation(
+        self,
+        *,
+        truck_id: int,
+        user_id: int,
+        note: Optional[str],
+    ) -> TruckReservation:
+        now = _utcnow()
+        reserved_at = _format_datetime(now)
+        with self.session() as conn:
+            conn.execute(
+                """
+                INSERT INTO truck_reservations (truck_id, user_id, note, reserved_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(truck_id) DO UPDATE SET
+                    user_id = excluded.user_id,
+                    note = excluded.note,
+                    reserved_at = excluded.reserved_at
+                """,
+                (truck_id, user_id, note, reserved_at),
+            )
+        reservation = self.get_reservation_for_truck(truck_id)
+        assert reservation is not None
+        return reservation
+
+    def delete_reservation_for_truck(self, truck_id: int) -> None:
+        with self.session() as conn:
+            conn.execute("DELETE FROM truck_reservations WHERE truck_id = ?", (truck_id,))
+
+    def get_reservation_for_truck(self, truck_id: int) -> Optional[TruckReservation]:
+        with self.session() as conn:
+            row = conn.execute("SELECT * FROM truck_reservations WHERE truck_id = ?", (truck_id,)).fetchone()
+        return _row_to_reservation(row) if row else None
+
+    def list_reservations(self) -> Iterable[TruckReservation]:
+        with self.session() as conn:
+            rows = conn.execute("SELECT * FROM truck_reservations").fetchall()
+        for row in rows:
+            yield _row_to_reservation(row)
+
+    def update_user_password(self, user_id: int, password_hash: str) -> None:
+        with self.session() as conn:
+            conn.execute(
+                "UPDATE users SET password_hash = ? WHERE id = ?",
+                (password_hash, user_id),
+            )
+
+    def update_user_security_questions(self, user_id: int, security_questions: list[dict[str, str]]) -> User:
+        serialized = json.dumps(security_questions)
+        with self.session() as conn:
+            conn.execute(
+                "UPDATE users SET security_questions = ? WHERE id = ?",
+                (serialized, user_id),
+            )
+        user = self.get_user(user_id)
+        if not user:
+            raise LookupError("User not found")
+        return user
+
+    def update_user_profile(self, user_id: int, name: str, ranger_number: Optional[str]) -> User:
+        with self.session() as conn:
+            conn.execute(
+                "UPDATE users SET name = ?, ranger_number = ? WHERE id = ?",
+                (name, ranger_number, user_id),
+            )
+        user = self.get_user(user_id)
+        if not user:
+            raise LookupError("User not found")
+        return user
+
 
 def _row_to_user(row: sqlite3.Row) -> User:
+    ranger_number = row["ranger_number"] if "ranger_number" in row.keys() else None
+    questions_raw = row["security_questions"] if "security_questions" in row.keys() else None
+    security_questions = json.loads(questions_raw) if questions_raw else []
     return User(
         id=row["id"],
         name=row["name"],
@@ -283,6 +502,18 @@ def _row_to_user(row: sqlite3.Row) -> User:
         password_hash=row["password_hash"],
         role=UserRole(row["role"]),
         created_at=_parse_datetime(row["created_at"]),
+        ranger_number=ranger_number,
+        security_questions=security_questions,
+    )
+
+
+def _row_to_reservation(row: sqlite3.Row) -> TruckReservation:
+    return TruckReservation(
+        id=row["id"],
+        truck_id=row["truck_id"],
+        user_id=row["user_id"],
+        note=row["note"],
+        reserved_at=_parse_datetime(row["reserved_at"]),
     )
 
 
@@ -327,6 +558,20 @@ def _row_to_session_token(row: sqlite3.Row) -> SessionToken:
         token=row["token"],
         created_at=_parse_datetime(row["created_at"]),
         expires_at=_parse_datetime(row["expires_at"]),
+    )
+
+
+def _row_to_assignment(row: sqlite3.Row) -> TruckAssignment:
+    return TruckAssignment(
+        id=row["id"],
+        truck_id=row["truck_id"],
+        ranger_id=row["ranger_id"],
+        start_inspection_id=row["start_inspection_id"],
+        end_inspection_id=row["end_inspection_id"],
+        start_miles=row["start_miles"],
+        end_miles=row["end_miles"],
+        checked_out_at=_parse_datetime(row["checked_out_at"]),
+        returned_at=_parse_datetime(row["returned_at"]) if row["returned_at"] else None,
     )
 
 

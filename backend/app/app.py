@@ -2,13 +2,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Callable, Iterable, List, Optional
 
 from .auth import AuthService
 from .database import Database
 from .inspections import InspectionService
-from .models import Inspection, InspectionNote, InspectionType, Truck, User, UserRole
-
+from .models import (
+    Inspection,
+    InspectionNote,
+    InspectionType,
+    Truck,
+    TruckAssignment,
+    TruckReservation,
+    User,
+    UserRole,
+)
 
 
 @dataclass
@@ -26,30 +34,72 @@ class TruckInspectionApp:
         return cls(database=database, auth=auth, inspections=inspections)
 
     def seed_defaults(self) -> None:
-        if not self.database.get_user_by_email("alex.ranger@example.com"):
+        default_ranger_questions = [
+            ("What park was your first assignment?", "Rocky Ridge"),
+            ("What is your ranger call sign?", "Alpha-1"),
+            ("Favorite trail snack?", "Trail mix"),
+        ]
+        ranger_user = self.database.get_user_by_email("ranger@email.com")
+        if not ranger_user:
             self.auth.register_user(
-                name="Alex Ranger",
-                email="alex.ranger@example.com",
-                password="rangerpass",
+                name="Sample Ranger",
+                email="ranger@email.com",
+                password="password",
+                security_responses=default_ranger_questions,
                 role=UserRole.RANGER,
+                ranger_number="RN-1001",
             )
-        if not self.database.get_user_by_email("sam.supervisor@example.com"):
+        elif not (ranger_user.security_questions or []):
+            self.auth.set_security_questions("ranger@email.com", default_ranger_questions)
+
+        default_supervisor_questions = [
+            ("What year did you join the parks team?", "2012"),
+            ("Name of your first ranger partner?", "Jamie"),
+            ("Favorite lookout point?", "Eagle Rock"),
+        ]
+        supervisor = self.database.get_user_by_email("supervisor@email.com")
+        if not supervisor:
             self.auth.register_user(
-                name="Sam Supervisor",
-                email="sam.supervisor@example.com",
-                password="supervisorpass",
+                name="Sample Supervisor",
+                email="supervisor@email.com",
+                password="password",
+                security_responses=default_supervisor_questions,
                 role=UserRole.SUPERVISOR,
+                ranger_number="RN-2001",
             )
-        if not self.database.get_truck_by_identifier("TR-100"):
-            self.database.add_truck("TR-100", "Medical response vehicle")
-        if not self.database.get_truck_by_identifier("TR-200"):
-            self.database.add_truck("TR-200", "Trail support truck")
-        if not self.database.get_truck_by_identifier("TR-300"):
-            self.database.add_truck("TR-300", "Logistics hauler")
+        elif not (supervisor.security_questions or []):
+            self.auth.set_security_questions("supervisor@email.com", default_supervisor_questions)
+        truck_definitions = [
+            ("SM88", None),
+            ("P0106", None),
+            ("P0101", None),
+            ("P0103", None),
+            ("427", None),
+            ("T1", None),
+            ("T2", None),
+            ("T3", None),
+        ]
+        for identifier, description in truck_definitions:
+            if not self.database.get_truck_by_identifier(identifier):
+                self.database.add_truck(identifier, description)
 
     # Truck operations
     def list_trucks(self) -> List[Truck]:
         return list(self.database.list_active_trucks())
+
+    def list_available_trucks(self) -> List[Truck]:
+        active_assignments = {assignment.truck_id for assignment in self.database.list_active_assignments()}
+        trucks = list(self.database.list_active_trucks())
+        return [truck for truck in trucks if truck.id not in active_assignments]
+
+    def get_active_assignment_for_truck(self, truck: Truck) -> Optional[TruckAssignment]:
+        return self.database.get_active_assignment_for_truck(truck.id)
+
+    def get_active_assignment_for_ranger(self, ranger: User) -> Optional[TruckAssignment]:
+        return self.database.get_active_assignment_for_ranger(ranger.id)
+
+    def list_active_assignments(self) -> List[TruckAssignment]:
+        return list(self.database.list_active_assignments())
 
     def create_truck(self, *, identifier: str, description: Optional[str], supervisor: User) -> Truck:
         if supervisor.role != UserRole.SUPERVISOR:
@@ -109,14 +159,154 @@ class TruckInspectionApp:
             raise PermissionError("Dashboard is available to supervisors only")
         return self.inspections.dashboard()
 
+    def export_inspections(
+        self,
+        *,
+        supervisor: User,
+        photo_resolver: Optional[Callable[[str], Optional[Path]]] = None,
+    ) -> tuple[str, bytes]:
+        if supervisor.role != UserRole.SUPERVISOR:
+            raise PermissionError("Only supervisors may export inspection data")
+        return self.inspections.export_inspections_workbook(
+            generated_by=supervisor,
+            photo_resolver=photo_resolver,
+        )
+
     def get_forms(self) -> dict[str, list[dict[str, object]]]:
         return self.inspections.list_forms()
+
+    def update_account(self, user_id: int, *, name: str, ranger_number: Optional[str]) -> User:
+        return self.auth.update_profile(user_id=user_id, name=name, ranger_number=ranger_number)
+
+    def checkout_truck(
+        self,
+        *,
+        ranger: User,
+        truck: Truck,
+        inspection: Inspection,
+    ) -> TruckAssignment:
+        if self.database.get_active_assignment_for_truck(truck.id):
+            raise ValueError("Truck is already checked out")
+        start_miles = self._extract_odometer(inspection)
+        assignment = self.database.add_assignment(
+            truck_id=truck.id,
+            ranger_id=ranger.id,
+            start_inspection_id=inspection.id,
+            start_miles=start_miles,
+        )
+        self.database.delete_reservation_for_truck(truck.id)
+        return assignment
+
+    def return_truck(
+        self,
+        *,
+        assignment_id: int,
+        ranger: User,
+        inspection: Inspection,
+    ) -> TruckAssignment:
+        assignment = self.database.get_assignment(assignment_id)
+        if not assignment:
+            raise LookupError("Assignment not found")
+        if assignment.returned_at is not None:
+            raise ValueError("Truck has already been returned")
+        if assignment.ranger_id != ranger.id:
+            raise PermissionError("You cannot return this truck")
+        if assignment.truck_id != inspection.truck_id:
+            raise ValueError("Inspection does not match the checked out truck")
+        end_miles = self._extract_odometer(inspection)
+        if end_miles < assignment.start_miles:
+            raise ValueError("Ending mileage cannot be less than the starting mileage")
+        return self.database.close_assignment(
+            assignment_id,
+            end_inspection_id=inspection.id,
+            end_miles=end_miles,
+        )
+
+    # Reservation operations
+    def reserve_truck(
+        self,
+        *,
+        requester: User,
+        truck: Truck,
+        note: Optional[str],
+    ) -> TruckReservation:
+        if self.database.get_active_assignment_for_truck(truck.id):
+            raise ValueError("Truck is currently checked out and cannot be reserved.")
+        existing = self.database.get_reservation_for_truck(truck.id)
+        if existing and existing.user_id != requester.id and requester.role != UserRole.SUPERVISOR:
+            raise ValueError("Truck already has a reservation.")
+        clean_note = (note or "").strip()
+        if len(clean_note) > 80:
+            raise ValueError("Reservation note must be 80 characters or fewer.")
+        if not clean_note:
+            clean_note = self._default_reservation_note(requester)
+        return self.database.add_or_update_reservation(
+            truck_id=truck.id,
+            user_id=requester.id,
+            note=clean_note or None,
+        )
+
+    def cancel_reservation(
+        self,
+        *,
+        requester: User,
+        truck: Truck,
+    ) -> None:
+        reservation = self.database.get_reservation_for_truck(truck.id)
+        if not reservation:
+            raise ValueError("No reservation exists for this truck.")
+        if reservation.user_id != requester.id:
+            raise PermissionError("You cannot cancel another ranger's reservation.")
+        self.database.delete_reservation_for_truck(truck.id)
+
+    def list_truck_reservations(self) -> list[TruckReservation]:
+        return list(self.database.list_reservations())
+
+    def update_reservation_note(
+        self,
+        *,
+        requester: User,
+        truck: Truck,
+        note: Optional[str],
+    ) -> TruckReservation:
+        reservation = self.database.get_reservation_for_truck(truck.id)
+        if not reservation:
+            raise ValueError("No reservation exists for this truck.")
+        if reservation.user_id != requester.id:
+            raise PermissionError("You cannot update another ranger's reservation.")
+        clean_note = (note or "").strip()
+        if len(clean_note) > 80:
+            raise ValueError("Reservation note must be 80 characters or fewer.")
+        owner = self.database.get_user(reservation.user_id) or requester
+        if not clean_note:
+            clean_note = self._default_reservation_note(owner)
+        return self.database.add_or_update_reservation(
+            truck_id=truck.id,
+            user_id=reservation.user_id,
+            note=clean_note,
+        )
+
+    def _default_reservation_note(self, user: User) -> str:
+        number = (user.ranger_number or "").strip()
+        digits = "".join(ch for ch in number if ch.isdigit())
+        suffix = digits[-2:] if len(digits) >= 2 else digits or "--"
+        return f"Reserved by Ranger {suffix}"
+
+    @staticmethod
+    def _extract_odometer(inspection: Inspection) -> int:
+        miles = inspection.responses.get("odometer_miles")
+        if miles is None:
+            raise ValueError("Inspection must include mileage")
+        try:
+            return int(miles)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid mileage value") from exc
 
 
 if __name__ == "__main__":  # pragma: no cover - manual interaction helper
     app = TruckInspectionApp.create(Path("truck_inspections.db"))
     app.seed_defaults()
     print("Truck Inspection App ready.")
-    print("Default ranger login: alex.ranger@example.com / rangerpass")
-    print("Default supervisor login: sam.supervisor@example.com / supervisorpass")
+    print("Default ranger login: ranger@email.com / password")
+    print("Default supervisor login: supervisor@email.com / password")
     print("Use this module within Python to interact with services programmatically.")

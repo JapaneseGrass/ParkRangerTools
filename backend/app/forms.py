@@ -13,8 +13,7 @@ class FieldType(str, Enum):
     NUMBER = "number"
 
 
-
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class InspectionField:
     id: str
     label: str
@@ -56,6 +55,10 @@ FORM_DEFINITIONS: dict[InspectionType, tuple[InspectionField, ...]] = {
         InspectionField("engine_sound_ok", "How sounds", FieldType.TEXT, required=False),
         InspectionField("mirrors_ok", "Mirrors function and are clean"),
         InspectionField("emergency_system_ok", "Emergency lights and siren work"),
+    ),
+    InspectionType.RETURN: (
+        InspectionField("odometer_miles", "Ending miles", FieldType.NUMBER),
+        InspectionField("return_notes", "Return notes", FieldType.TEXT, required=False),
     ),
 }
 

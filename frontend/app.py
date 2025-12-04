@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import html
 import mimetypes
 import secrets
@@ -15,7 +16,102 @@ from urllib.parse import parse_qs, urlparse
 
 from backend.app.app import TruckInspectionApp
 from backend.app.forms import FieldType, get_form_definition
-from backend.app.models import Inspection, InspectionType, Truck, User, UserRole
+from backend.app.models import (
+    Inspection,
+    InspectionType,
+    Truck,
+    TruckAssignment,
+    TruckReservation,
+    User,
+    UserRole,
+)
+from backend.app.auth import ALLOWED_EMAIL_ROLES
+
+
+TRUCK_CATEGORY_MAP: dict[str, str] = {
+    "SM88": "full_size",
+    "P0106": "full_size",
+    "P0101": "mid_size",
+    "P0103": "mid_size",
+    "427": "mid_size",
+    "T1": "maintenance",
+    "T2": "maintenance",
+    "T3": "maintenance",
+}
+
+TRUCK_CATEGORY_INFO: dict[str, dict[str, str]] = {
+    "full_size": {
+        "label": "Ford F-150",
+        "badge_class": "full-size",
+        "icon": """
+        <svg class=\"truck-icon\" viewBox=\"0 0 140 64\" role=\"img\" aria-label=\"Full-size pickup\">
+          <rect x=\"18\" y=\"30\" width=\"90\" height=\"22\" rx=\"6\" fill=\"#2f6b3c\" />
+          <rect x=\"82\" y=\"22\" width=\"36\" height=\"20\" rx=\"6\" fill=\"#24512c\" />
+          <rect x=\"90\" y=\"26\" width=\"20\" height=\"12\" rx=\"3\" fill=\"#e6f2eb\" />
+          <rect x=\"30\" y=\"32\" width=\"18\" height=\"8\" rx=\"3\" fill=\"#f8e1a0\" />
+          <circle cx=\"42\" cy=\"56\" r=\"9\" fill=\"#1f2a24\" />
+          <circle cx=\"96\" cy=\"56\" r=\"9\" fill=\"#1f2a24\" />
+          <circle cx=\"42\" cy=\"56\" r=\"4\" fill=\"#d4dad6\" />
+          <circle cx=\"96\" cy=\"56\" r=\"4\" fill=\"#d4dad6\" />
+        </svg>
+        """,
+    },
+    "mid_size": {
+        "label": "Chevy Colorado",
+        "badge_class": "mid-size",
+        "icon": """
+        <svg class=\"truck-icon\" viewBox=\"0 0 140 64\" role=\"img\" aria-label=\"Mid-size pickup\">
+          <rect x=\"20\" y=\"32\" width=\"80\" height=\"20\" rx=\"6\" fill=\"#c47a3a\" />
+          <rect x=\"74\" y=\"24\" width=\"32\" height=\"18\" rx=\"6\" fill=\"#a9622a\" />
+          <rect x=\"80\" y=\"28\" width=\"16\" height=\"10\" rx=\"3\" fill=\"#f4e6da\" />
+          <rect x=\"28\" y=\"34\" width=\"16\" height=\"6\" rx=\"3\" fill=\"#f6d28f\" />
+          <circle cx=\"40\" cy=\"56\" r=\"8.5\" fill=\"#1f2a24\" />
+          <circle cx=\"92\" cy=\"56\" r=\"8.5\" fill=\"#1f2a24\" />
+          <circle cx=\"40\" cy=\"56\" r=\"3.8\" fill=\"#f4dfc6\" />
+          <circle cx=\"92\" cy=\"56\" r=\"3.8\" fill=\"#f4dfc6\" />
+        </svg>
+        """,
+    },
+    "maintenance": {
+        "label": "F-150 Flatbed",
+        "badge_class": "maintenance",
+        "icon": """
+        <svg class=\"truck-icon\" viewBox=\"0 0 148 64\" role=\"img\" aria-label=\"Flatbed pickup\">
+          <rect x=\"20\" y=\"34\" width=\"58\" height=\"20\" rx=\"5\" fill=\"#6c7568\" />
+          <rect x=\"74\" y=\"26\" width=\"32\" height=\"18\" rx=\"6\" fill=\"#879182\" />
+          <rect x=\"104\" y=\"34\" width=\"22\" height=\"20\" rx=\"4\" fill=\"#a0a89c\" />
+          <rect x=\"80\" y=\"30\" width=\"16\" height=\"10\" rx=\"3\" fill=\"#edf0e6\" />
+          <rect x=\"26\" y=\"36\" width=\"20\" height=\"6\" rx=\"2\" fill=\"#f7d56b\" />
+          <circle cx=\"38\" cy=\"56\" r=\"8.5\" fill=\"#1f2a24\" />
+          <circle cx=\"92\" cy=\"56\" r=\"8.5\" fill=\"#1f2a24\" />
+          <circle cx=\"38\" cy=\"56\" r=\"3.8\" fill=\"#dfe8de\" />
+          <circle cx=\"92\" cy=\"56\" r=\"3.8\" fill=\"#dfe8de\" />
+        </svg>
+        """,
+    },
+    "default": {
+        "label": "Park vehicle",
+        "badge_class": "default",
+        "icon": """
+        <svg class=\"truck-icon\" viewBox=\"0 0 140 68\" role=\"img\" aria-label=\"Park vehicle\">
+          <rect x=\"20\" y=\"34\" width=\"66\" height=\"20\" rx=\"6\" fill=\"#4f7460\" />
+          <rect x=\"68\" y=\"26\" width=\"30\" height=\"18\" rx=\"6\" fill=\"#6d8f7f\" />
+          <circle cx=\"36\" cy=\"56\" r=\"8\" fill=\"#2b2b2b\" />
+          <circle cx=\"82\" cy=\"56\" r=\"8\" fill=\"#2b2b2b\" />
+          <circle cx=\"36\" cy=\"56\" r=\"3.5\" fill=\"#dfe8de\" />
+          <circle cx=\"82\" cy=\"56\" r=\"3.5\" fill=\"#dfe8de\" />
+        </svg>
+        """,
+    },
+}
+
+
+def backend_role_for_email(email: str) -> UserRole:
+    normalized = email.strip().lower()
+    role = ALLOWED_EMAIL_ROLES.get(normalized)
+    if role is None:
+        raise ValueError("Registration is restricted to approved park ranger accounts.")
+    return role
 
 
 @dataclass
@@ -25,12 +121,19 @@ class UploadedFile:
     data: bytes
 
 class Request:
-    method: str
-    target: str
-    headers: dict[str, str]
-    body: bytes = b""
+    def __init__(
+        self,
+        *,
+        method: str,
+        target: str,
+        headers: dict[str, str],
+        body: bytes = b"",
+    ) -> None:
+        self.method = method
+        self.target = target
+        self.headers = headers
+        self.body = body
 
-    def __post_init__(self) -> None:
         parsed = urlparse(self.target)
         self.path = parsed.path or "/"
         self.query = parse_qs(parsed.query)
@@ -169,7 +272,14 @@ class TruckInspectionWebApp:
             ("GET", "/login"): self._login_get,
             ("POST", "/login"): self._login_post,
             ("GET", "/logout"): self._logout,
+            ("GET", "/register"): self._register_get,
+            ("POST", "/register"): self._register_post,
+            ("GET", "/password"): self._password_get,
+            ("POST", "/password"): self._password_post,
+            ("GET", "/account"): self._account_get,
+            ("POST", "/account"): self._account_post,
             ("GET", "/inspections"): self._inspection_list,
+            ("GET", "/inspections/export"): self._export_inspections,
             ("GET", "/dashboard"): self._dashboard,
         }
         handler = simple_routes.get((request.method, request.path))
@@ -180,6 +290,8 @@ class TruckInspectionWebApp:
             parts = request.path.strip("/").split("/")
             if len(parts) == 4 and parts[2] == "inspect":
                 return self._truck_inspection, {"truck_id": parts[1], "inspection_type": parts[3]}
+            if len(parts) == 3 and parts[2] == "reserve" and request.method == "POST":
+                return self._reserve_truck, {"truck_id": parts[1]}
         if request.path.startswith("/inspections/"):
             parts = request.path.strip("/").split("/")
             if len(parts) == 2 and request.method == "GET":
@@ -223,15 +335,33 @@ class TruckInspectionWebApp:
         user = self._current_user(request)
         if not user:
             return self._redirect("/login")
+        ranger_filter = user if user.role == UserRole.SUPERVISOR else None
+        inspections = [
+            self._build_inspection_view(insp)
+            for insp in self.service.list_inspections(requester=user, ranger=ranger_filter)
+        ]
         if user.role == UserRole.SUPERVISOR:
-            return self._redirect("/dashboard")
-        trucks = self.service.list_trucks()
-        inspections = [self._build_inspection_view(insp) for insp in self.service.list_inspections(requester=user)]
-        content = self._render_home(user, trucks, inspections)
-        return self._page("Ranger Home", user, content)
+            trucks = self.service.list_trucks()
+            active_assignments = {assignment.truck_id: assignment for assignment in self.service.list_active_assignments()}
+            supervisor_assignment = self.service.get_active_assignment_for_ranger(user)
+            supervisor_truck = self.service.get_truck(supervisor_assignment.truck_id) if supervisor_assignment else None
+            content = self._render_supervisor_home(
+                user,
+                trucks,
+                active_assignments,
+                inspections,
+                supervisor_assignment,
+                supervisor_truck,
+            )
+        else:
+            assignment = self.service.get_active_assignment_for_ranger(user)
+            assignment_truck = self.service.get_truck(assignment.truck_id) if assignment else None
+            content = self._render_ranger_home(user, assignment, assignment_truck, inspections)
+        page_title = "Ranger Home" if user.role == UserRole.RANGER else "Home"
+        return self._page(page_title, user, content)
 
     def _login_get(self, request: Request) -> Response:
-        return self._page("Sign in", None, self._render_login())
+        return self._page("Sign in", None, self._render_login(), show_icons=False)
 
     def _login_post(self, request: Request) -> Response:
         email = (request.form_value("email") or "").strip()
@@ -239,7 +369,7 @@ class TruckInspectionWebApp:
         token = self.service.auth.authenticate(email, password)
         if token is None:
             self._flash(request, "error", "Invalid credentials. Please try again.")
-            return self._page("Sign in", None, self._render_login())
+            return self._page("Sign in", None, self._render_login(), show_icons=False)
         user = self.service.database.get_user(token.user_id)
         response = self._redirect("/")
         if user:
@@ -253,6 +383,243 @@ class TruckInspectionWebApp:
         self._flash(request, "info", "Signed out.")
         return response
 
+    def _register_get(self, request: Request) -> Response:
+        return self._page("Create account", None, self._render_register(), show_icons=False)
+
+    def _register_post(self, request: Request) -> Response:
+        name = (request.form_value("name") or "").strip()
+        email = (request.form_value("email") or "").strip()
+        ranger_number = (request.form_value("ranger_number") or "").strip()
+        password = request.form_value("password") or ""
+        confirm = request.form_value("confirm_password") or ""
+        security_questions = []
+        security_responses: list[tuple[str, str]] = []
+        for idx in range(1, 4):
+            question = (request.form_value(f"security_question_{idx}") or "").strip()
+            answer = (request.form_value(f"security_answer_{idx}") or "").strip()
+            security_questions.append(question)
+            security_responses.append((question, answer))
+        if not name or not email or not password:
+            self._flash(request, "error", "All fields are required.")
+            return self._page(
+                "Create account",
+                None,
+                self._render_register(
+                    name=name,
+                    email=email,
+                    ranger_number=ranger_number,
+                    security_questions=security_questions,
+                ),
+                show_icons=False,
+            )
+        if not ranger_number:
+            self._flash(request, "error", "Ranger number is required.")
+            return self._page(
+                "Create account",
+                None,
+                self._render_register(
+                    name=name,
+                    email=email,
+                    ranger_number=ranger_number,
+                    security_questions=security_questions,
+                ),
+                show_icons=False,
+            )
+        if password != confirm:
+            self._flash(request, "error", "Passwords do not match.")
+            return self._page(
+                "Create account",
+                None,
+                self._render_register(
+                    name=name,
+                    email=email,
+                    ranger_number=ranger_number,
+                    security_questions=security_questions,
+                ),
+                show_icons=False,
+            )
+        try:
+            role = backend_role_for_email(email)
+            self.service.auth.register_user(
+                name=name,
+                email=email,
+                password=password,
+                security_responses=security_responses,
+                role=role,
+                ranger_number=ranger_number,
+            )
+        except ValueError as exc:
+            self._flash(request, "error", str(exc))
+            return self._page(
+                "Create account",
+                None,
+                self._render_register(
+                    name=name,
+                    email=email,
+                    ranger_number=ranger_number,
+                    security_questions=security_questions,
+                ),
+                show_icons=False,
+            )
+        except Exception:
+            self._flash(request, "error", "Unable to create account. The email may already be registered.")
+            return self._page(
+                "Create account",
+                None,
+                self._render_register(
+                    name=name,
+                    email=email,
+                    ranger_number=ranger_number,
+                    security_questions=security_questions,
+                ),
+            )
+        self._flash(request, "success", "Account created. You can now sign in.")
+        return self._redirect("/login")
+
+    def _password_get(self, request: Request) -> Response:
+        email = ""
+        questions: list[str] | None = None
+        if request.query.get("email"):
+            email = (request.query["email"][0] or "").strip()
+            if email:
+                user = self.service.database.get_user_by_email(email.lower())
+                if user and user.security_questions:
+                    questions = [entry.get("question", "") for entry in user.security_questions]
+                else:
+                    self._flash(request, "error", "No account found for that email or security questions not set.")
+        return self._page("Update password", None, self._render_password(email=email, questions=questions), show_icons=False)
+
+    def _password_post(self, request: Request) -> Response:
+        email = (request.form_value("email") or "").strip()
+        password = request.form_value("password") or ""
+        confirm = request.form_value("confirm_password") or ""
+        user = self.service.database.get_user_by_email(email.lower()) if email else None
+        stored_questions = [entry.get("question", "") for entry in (user.security_questions if user else [])]
+        questions = stored_questions or None
+        if not email or not password:
+            self._flash(request, "error", "Email and new password are required.")
+            return self._page("Update password", None, self._render_password(email=email, questions=questions), show_icons=False)
+        if password != confirm:
+            self._flash(request, "error", "Passwords do not match.")
+            return self._page("Update password", None, self._render_password(email=email, questions=questions), show_icons=False)
+        answers: list[str] = []
+        if user:
+            if not stored_questions:
+                self._flash(request, "error", "Security questions are not configured for this account.")
+                return self._page("Update password", None, self._render_password(email=email, questions=questions), show_icons=False)
+            for idx in range(1, len(stored_questions) + 1):
+                answer = (request.form_value(f"security_answer_{idx}") or "").strip()
+                if not answer:
+                    self._flash(request, "error", "Please answer all security questions.")
+                    return self._page("Update password", None, self._render_password(email=email, questions=questions))
+                answers.append(answer)
+        try:
+            self.service.auth.update_password(email=email, new_password=password, security_answers=answers)
+        except ValueError as exc:
+            self._flash(request, "error", str(exc))
+            return self._page("Update password", None, self._render_password(email=email, questions=questions), show_icons=False)
+        except LookupError as exc:
+            self._flash(request, "error", str(exc))
+            return self._page("Update password", None, self._render_password(email=email, questions=questions), show_icons=False)
+        self._flash(request, "success", "Password updated. You can now sign in with the new password.")
+        return self._redirect("/login")
+
+    def _account_get(self, request: Request) -> Response:
+        user = self._current_user(request)
+        if not user:
+            return self._redirect("/login")
+        return self._page(
+            "Account",
+            user,
+            self._render_account(user, name=user.name, ranger_number=user.ranger_number or ""),
+        )
+
+    def _account_post(self, request: Request) -> Response:
+        user = self._current_user(request)
+        if not user:
+            return self._redirect("/login")
+        name = (request.form_value("name") or "").strip()
+        ranger_number = (request.form_value("ranger_number") or "").strip()
+        password = request.form_value("password") or ""
+        confirm = request.form_value("confirm_password") or ""
+        if not name or not ranger_number:
+            self._flash(request, "error", "Name and ranger number are required.")
+            return self._page(
+                "Account",
+                user,
+                self._render_account(user, name=name or user.name, ranger_number=ranger_number),
+            )
+        try:
+            updated_user = self.service.auth.update_profile(user.id, name=name, ranger_number=ranger_number)
+            if password or confirm:
+                if password != confirm:
+                    self._flash(request, "error", "Passwords do not match.")
+                    return self._page(
+                        "Account",
+                        user,
+                        self._render_account(
+                            user,
+                            name=name,
+                            ranger_number=ranger_number,
+                        ),
+                    )
+                stored_questions = [entry.get("question", "") for entry in (updated_user.security_questions or [])]
+                answers: list[str] = []
+                for idx in range(1, len(stored_questions) + 1):
+                    answer = (request.form_value(f"acct_security_answer_{idx}") or "").strip()
+                    if not answer:
+                        self._flash(request, "error", "Please answer all security questions to change your password.")
+                        return self._page(
+                            "Account",
+                            user,
+                            self._render_account(
+                                user,
+                                name=name,
+                                ranger_number=ranger_number,
+                            ),
+                        )
+                    answers.append(answer)
+                if not answers:
+                    self._flash(request, "error", "Security questions are required to change your password.")
+                    return self._page(
+                        "Account",
+                        user,
+                        self._render_account(
+                            user,
+                            name=name,
+                            ranger_number=ranger_number,
+                        ),
+                    )
+                self.service.auth.update_password(
+                    email=updated_user.email,
+                    new_password=password,
+                    security_answers=answers,
+                )
+        except ValueError as exc:
+            self._flash(request, "error", str(exc))
+            return self._page(
+                "Account",
+                user,
+                self._render_account(
+                    user,
+                    name=name,
+                    ranger_number=ranger_number,
+                ),
+            )
+        except LookupError as exc:
+            self._flash(request, "error", str(exc))
+            return self._page(
+                "Account",
+                user,
+                self._render_account(
+                    user,
+                    name=name,
+                    ranger_number=ranger_number,
+                ),
+            )
+        self._flash(request, "success", "Account details updated.")
+        return self._redirect("/account")
+
     def _truck_inspection(self, request: Request, *, truck_id: str, inspection_type: str) -> Response:
         user = self._current_user(request)
         if not user:
@@ -265,12 +632,78 @@ class TruckInspectionWebApp:
             inspection_enum = InspectionType(inspection_type)
         except ValueError:
             return self._not_found()
+        preserved = self._preserve_form_state(request)
+        action = request.query.get("action", [None])[0]
+        if request.method == "POST":
+            action = request.form_value("action") or action
+        action = action or "checkout"
+        if action not in {"checkout", "return"}:
+            action = "checkout"
+
+        assignment_obj: Optional[TruckAssignment] = None
+        assignment_param = request.query.get("assignment", [None])[0]
+        if request.method == "POST":
+            assignment_param = request.form_value("assignment_id") or assignment_param
+        assignment_id: Optional[int]
+        if assignment_param:
+            try:
+                assignment_id = int(assignment_param)
+            except ValueError:
+                assignment_id = None
+            else:
+                assignment_obj = self.service.database.get_assignment(assignment_id)
+                if not assignment_obj:
+                    assignment_id = None
+                    assignment_obj = None
+        else:
+            assignment_id = None
+            assignment_obj = None
+
+        if action == "return" and not assignment_obj:
+            assignment_obj = self.service.get_active_assignment_for_ranger(user)
+            if assignment_obj and assignment_obj.truck_id != truck.id:
+                assignment_obj = None
+            if assignment_obj:
+                assignment_id = assignment_obj.id
+
+        if action == "return":
+            inspection_enum = InspectionType.RETURN
+
         fields = get_form_definition(inspection_enum)
+
+        active_assignment_for_truck = self.service.get_active_assignment_for_truck(truck)
+        ranger_assignment = self.service.get_active_assignment_for_ranger(user) if user.role == UserRole.RANGER else None
+        if action == "checkout" and ranger_assignment and ranger_assignment.truck_id != truck.id:
+            self._flash(request, "error", "You already have a vehicle checked out. Please return it before checking out another truck.")
+            return self._redirect("/")
+
+        if action == "checkout" and active_assignment_for_truck:
+            if active_assignment_for_truck.ranger_id == user.id:
+                self._flash(request, "info", "You already have this truck checked out. Please return it before starting another inspection.")
+            else:
+                self._flash(request, "error", "This truck is currently checked out by another ranger.")
+            return self._redirect("/")
+        if action == "return":
+            if not assignment_obj:
+                self._flash(request, "error", "No active checkout found for this truck.")
+                return self._redirect("/")
+            if assignment_obj.ranger_id != user.id and user.role != UserRole.SUPERVISOR:
+                self._flash(request, "error", "You cannot return a truck you did not check out.")
+                return self._redirect("/")
+
         if request.method == "POST":
             try:
                 responses = self._collect_responses(request, inspection_enum)
-                photos = self._collect_photos(request)
+                if inspection_enum is InspectionType.RETURN:
+                    photos = []
+                else:
+                    photos = self._collect_photos(request)
                 escalate = request.form_value("escalate_visibility") == "1"
+                miles_value = responses.get("odometer_miles")
+                if not isinstance(miles_value, int):
+                    raise ValueError("Mileage must be provided as a number.")
+                if action == "return" and assignment_obj and miles_value < assignment_obj.start_miles:
+                    raise ValueError("Ending mileage must be greater than or equal to the starting mileage.")
                 inspection = self.service.submit_inspection(
                     user=user,
                     truck=truck,
@@ -279,11 +712,25 @@ class TruckInspectionWebApp:
                     photo_urls=photos,
                     escalate_visibility=escalate,
                 )
-                self._flash(request, "success", "Inspection submitted successfully.")
+                if action == "checkout":
+                    self.service.checkout_truck(ranger=user, truck=truck, inspection=inspection)
+                    self._flash(request, "success", "Truck checked out successfully.")
+                else:
+                    assert assignment_id is not None
+                    self.service.return_truck(assignment_id=assignment_id, ranger=user, inspection=inspection)
+                    self._flash(request, "success", "Truck returned successfully.")
                 return self._redirect(f"/inspections/{inspection.id}")
             except ValueError as exc:
                 self._flash(request, "error", str(exc))
-        content = self._render_inspection_form(truck, inspection_enum, fields)
+                preserved = self._preserve_form_state(request)
+        content = self._render_inspection_form(
+            truck,
+            inspection_enum,
+            fields,
+            action,
+            assignment_id,
+            preserved,
+        )
         return self._page(f"{inspection_enum.value.title()} inspection", user, content)
 
     def _inspection_list(self, request: Request) -> Response:
@@ -293,6 +740,39 @@ class TruckInspectionWebApp:
         inspections = [self._build_inspection_view(insp) for insp in self.service.list_inspections(requester=user)]
         content = self._render_inspection_table("Inspections", inspections)
         return self._page("Inspections", user, content)
+
+    def _export_inspections(self, request: Request) -> Response:
+        user = self._current_user(request)
+        if not user:
+            return self._redirect("/login")
+        if user.role != UserRole.SUPERVISOR:
+            return self._not_found()
+        def resolve_photo(url: str) -> Optional[Path]:
+            raw = url.strip()
+            candidates: list[Path] = []
+            parsed = Path(raw)
+            if parsed.is_absolute():
+                candidates.append(parsed)
+            if raw.startswith("/uploads/"):
+                candidates.append(self.upload_dir / Path(raw).name)
+                candidates.append(self.upload_dir / raw.lstrip("/"))
+            else:
+                candidates.append(self.upload_dir / raw)
+            for candidate in candidates:
+                if candidate.exists():
+                    return candidate
+            return None
+
+        filename, payload = self.service.export_inspections(supervisor=user, photo_resolver=resolve_photo)
+        response = Response(status=HTTPStatus.OK, body=payload)
+        response.add_header(
+            "Content-Type",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        response.add_header("Content-Disposition", f'attachment; filename="{filename}"')
+        response.add_header("Cache-Control", "no-store")
+        response.add_header("Content-Length", str(len(payload)))
+        return response
 
     def _inspection_detail(self, request: Request, *, inspection_id: str) -> Response:
         user = self._current_user(request)
@@ -325,6 +805,30 @@ class TruckInspectionWebApp:
             self._flash(request, "error", str(exc))
         return self._redirect(f"/inspections/{inspection.id}")
 
+    def _reserve_truck(self, request: Request, *, truck_id: str) -> Response:
+        user = self._current_user(request)
+        if not user:
+            return self._redirect("/login")
+        try:
+            truck = self.service.get_truck(int(truck_id))
+        except (ValueError, LookupError):
+            return self._not_found()
+        action = (request.form_value("reserve_action") or "reserve").strip().lower()
+        note = request.form_value("reserve_note") or ""
+        try:
+            if action == "cancel":
+                self.service.cancel_reservation(requester=user, truck=truck)
+                self._flash(request, "success", "Reservation cancelled.")
+            elif action == "update":
+                self.service.update_reservation_note(requester=user, truck=truck, note=note)
+                self._flash(request, "success", "Reservation note updated.")
+            else:
+                self.service.reserve_truck(requester=user, truck=truck, note=note)
+                self._flash(request, "success", "Reservation saved.")
+        except (PermissionError, ValueError) as exc:
+            self._flash(request, "error", str(exc))
+        return self._redirect("/")
+
     def _dashboard(self, request: Request) -> Response:
         user = self._current_user(request)
         if not user:
@@ -337,8 +841,18 @@ class TruckInspectionWebApp:
         return self._page("Supervisor dashboard", user, content)
 
     # Utility responses ----------------------------------------------------------
-    def _page(self, title: str, user: Optional[User], content: str) -> Response:
+    def _page(
+        self,
+        title: str,
+        user: Optional[User],
+        content: str,
+        *,
+        body_class: Optional[str] = None,
+        show_icons: bool = True,
+    ) -> Response:
         nav = self._nav_links(user)
+        icons = self._top_nav_icons() if show_icons else ""
+        body_attr = f' class="{body_class}"' if body_class else ""
         body = f"""
         <!doctype html>
         <html lang=\"en\">
@@ -348,11 +862,11 @@ class TruckInspectionWebApp:
             <title>{html.escape(title)} - Truck Inspection App</title>
             <link rel=\"stylesheet\" href=\"/static/styles.css\" />
             <script src=\"/static/app.js\" defer></script>
-
           </head>
-          <body>
+          <body{body_attr}>
             <header class=\"top-bar\">
               <div class=\"brand\">Truck Inspection App</div>
+              <div class=\"top-bar-icons\">{icons}</div>
               <nav class=\"nav-links\">{nav}</nav>
             </header>
             <main class=\"content\">
@@ -364,6 +878,37 @@ class TruckInspectionWebApp:
         </html>
         """
         return Response(body=body)
+
+    def _top_nav_icons(self) -> str:
+        available = sorted(self.service.list_available_trucks(), key=lambda truck: truck.identifier.upper())
+        if not available:
+            return ""
+        icon_fragments: list[str] = []
+        tracked_categories = {"full_size", "mid_size"}
+        for truck in available:
+            profile = self._truck_profile(truck)
+            if profile["category"] not in tracked_categories:
+                continue
+            label = html.escape(truck.identifier.upper())
+            icon_fragments.append(
+                f'<span class="top-bar-icon" title="Truck {label} available">{profile["icon"]}</span>'
+            )
+        return "".join(icon_fragments)
+
+    def _reservation_default_for_user(self, user: Optional[User]) -> Optional[str]:
+        identifier = self._ranger_identifier(user)
+        return f"Reserved by {identifier}" if identifier else None
+
+    def _ranger_identifier(self, user: Optional[User], fallback_id: Optional[int] = None) -> Optional[str]:
+        if user:
+            number = (user.ranger_number or "").strip()
+            digits = "".join(ch for ch in number if ch.isdigit())
+            if digits:
+                suffix = digits[-2:] if len(digits) >= 2 else digits
+                return f"Ranger {suffix}"
+        if fallback_id is not None:
+            return f"Ranger {fallback_id}"
+        return "Ranger --"
 
     def _redirect(self, location: str) -> Response:
         response = Response(status=HTTPStatus.SEE_OTHER)
@@ -412,9 +957,12 @@ class TruckInspectionWebApp:
             links.append('<a href="/inspections">Inspections</a>')
             if user.role == UserRole.SUPERVISOR:
                 links.append('<a href="/dashboard">Dashboard</a>')
+            links.append('<a href="/account">Account</a>')
             links.append('<a href="/logout">Sign out</a>')
         else:
             links.append('<a href="/login">Sign in</a>')
+            links.append('<a href="/register">Register</a>')
+            links.append('<a href="/password">Update password</a>')
         return "".join(links)
 
     def _render_messages(self, messages: Iterable[tuple[str, str]]) -> str:
@@ -434,48 +982,390 @@ class TruckInspectionWebApp:
             <input type=\"password\" id=\"password\" name=\"password\" required />
             <button type=\"submit\">Sign in</button>
           </form>
-          <p class=\"hint\">Use the seeded accounts described in the README.</p>
+          <p class=\"hint\">Need access? <a href=\"/register\">Create an approved account</a> or <a href=\"/password\">update your password</a>.</p>
         </section>
         """
 
-    def _render_home(self, user: User, trucks: list[Truck], inspections: list[dict[str, Any]]) -> str:
-        truck_cards = "".join(
-            f"""
-            <article class=\"card\">
-              <h2>{html.escape(truck.identifier)}</h2>
-              <p class=\"muted\">{html.escape(truck.description or 'No description')}</p>
-              <div class=\"actions\">
-                <a class=\"button\" href=\"/trucks/{truck.id}/inspect/quick\">Quick report</a>
-                <a class=\"button secondary\" href=\"/trucks/{truck.id}/inspect/detailed\">Detailed report</a>
-              </div>
-            </article>
+    def _render_register(
+        self,
+        *,
+        name: str = "",
+        email: str = "",
+        ranger_number: str = "",
+        security_questions: Optional[list[str]] = None,
+    ) -> str:
+        questions = security_questions or ["", "", ""]
+        question_fields = []
+        for idx in range(1, 4):
+            question_value = html.escape(questions[idx - 1]) if idx - 1 < len(questions) else ""
+            question_fields.append(
+                f"""
+                <div class=\"form-field\">
+                  <label for=\"sec-question-{idx}\">Security question {idx}</label>
+                  <input type=\"text\" id=\"sec-question-{idx}\" name=\"security_question_{idx}\" value=\"{question_value}\" required />
+                </div>
+                <div class=\"form-field\">
+                  <label for=\"sec-answer-{idx}\">Answer {idx}</label>
+                  <input type=\"text\" id=\"sec-answer-{idx}\" name=\"security_answer_{idx}\" required />
+                </div>
+                """
+            )
+        return f"""
+        <section class=\"card narrow\">
+          <h1>Create account</h1>
+          <form method=\"post\" class=\"form\">
+            <label for=\"name\">Full name</label>
+            <input type=\"text\" id=\"name\" name=\"name\" value=\"{html.escape(name)}\" required autofocus />
+            <label for=\"reg-email\">Email</label>
+            <input type=\"email\" id=\"reg-email\" name=\"email\" value=\"{html.escape(email)}\" required />
+            <label for=\"reg-number\">Ranger number</label>
+            <input type=\"text\" id=\"reg-number\" name=\"ranger_number\" value=\"{html.escape(ranger_number)}\" required />
+            <label for=\"reg-password\">Password</label>
+            <input type=\"password\" id=\"reg-password\" name=\"password\" required />
+            <label for=\"reg-confirm\">Confirm password</label>
+            <input type=\"password\" id=\"reg-confirm\" name=\"confirm_password\" required />
+            <fieldset class=\"security-questions\">
+              <legend>Security questions</legend>
+              <p class=\"muted small\">These will be used to verify your identity when resetting a password.</p>
+              {''.join(question_fields)}
+            </fieldset>
+            <button type=\"submit\">Create account</button>
+          </form>
+          <p class=\"hint\">Only approved park ranger email addresses may register.</p>
+        </section>
+        """
+
+    def _render_password(self, *, email: str = "", questions: Optional[list[str]] = None) -> str:
+        email_value = html.escape(email)
+        question_html = ""
+        if questions:
+            answer_fields = []
+            for idx, prompt in enumerate(questions, start=1):
+                answer_fields.append(
+                    f"""
+                    <div class=\"form-field\">
+                      <label>{html.escape(prompt)}</label>
+                      <input type=\"text\" name=\"security_answer_{idx}\" required />
+                    </div>
+                    """
+                )
+            question_html = f"""
+            <fieldset class=\"security-questions\">
+              <legend>Verify your identity</legend>
+              {''.join(answer_fields)}
+            </fieldset>
             """
+            submit_disabled = ""
+        else:
+            submit_disabled = " disabled"
+        return f"""
+        <section class=\"card narrow\">
+          <h1>Update password</h1>
+          <form method=\"get\" class=\"form inline-form\">
+            <label for=\"lookup-email\">Account email</label>
+            <input type=\"email\" id=\"lookup-email\" name=\"email\" value=\"{email_value}\" required autofocus />
+            <button type=\"submit\" class=\"button secondary\">Load security questions</button>
+          </form>
+          <form method=\"post\" class=\"form\">
+            <input type=\"hidden\" name=\"email\" value=\"{email_value}\" />
+            <label for=\"pw-new\">New password</label>
+            <input type=\"password\" id=\"pw-new\" name=\"password\" required />
+            <label for=\"pw-confirm\">Confirm password</label>
+            <input type=\"password\" id=\"pw-confirm\" name=\"confirm_password\" required />
+            {question_html or '<p class="muted small">Load your security questions to continue.</p>'}
+            <button type=\"submit\" class=\"primary-action\"{submit_disabled}>Update password</button>
+          </form>
+          <p class=\"hint\">Use the email address from your ranger account to view your saved security prompts.</p>
+        </section>
+        """
+
+    def _render_account(
+        self,
+        user: User,
+        *,
+        name: str,
+        ranger_number: str,
+        security_questions: Optional[list[str]] = None,
+    ) -> str:
+        number_value = html.escape(ranger_number)
+        questions = security_questions if security_questions is not None else [
+            entry.get("question", "") for entry in (user.security_questions or [])
+        ]
+        answers_section = ""
+        if questions:
+            answer_fields = []
+            for idx, prompt in enumerate(questions, start=1):
+                if not prompt:
+                    continue
+                answer_fields.append(
+                    f"""
+                    <div class=\"form-field\">
+                      <label>{html.escape(prompt)}</label>
+                      <input type=\"text\" name=\"acct_security_answer_{idx}\" />
+                    </div>
+                    """
+                )
+            if answer_fields:
+                answers_section = f"""
+                <fieldset class=\"security-questions\">
+                  <legend>Verify to change password</legend>
+                  <p class=\"muted small\">Provide answers to your saved security questions to update your password.</p>
+                  {''.join(answer_fields)}
+                </fieldset>
+                """
+        return f"""
+        <section class=\"card narrow\">
+          <h1>Account information</h1>
+          <form method=\"post\" class=\"form\">
+            <label for=\"acct-name\">Full name</label>
+            <input type=\"text\" id=\"acct-name\" name=\"name\" value=\"{html.escape(name)}\" required autofocus />
+            <label>Email</label>
+            <input type=\"email\" value=\"{html.escape(user.email)}\" disabled />
+            <label for=\"acct-number\">Ranger number</label>
+            <input type=\"text\" id=\"acct-number\" name=\"ranger_number\" value=\"{number_value}\" required />
+            <hr />
+            <p class=\"muted\">Update your password (optional)</p>
+            <label for=\"acct-password\">New password</label>
+            <input type=\"password\" id=\"acct-password\" name=\"password\" />
+            <label for=\"acct-confirm\">Confirm password</label>
+            <input type=\"password\" id=\"acct-confirm\" name=\"confirm_password\" />
+            {answers_section}
+            <button type=\"submit\" class=\"primary-action\">Save changes</button>
+          </form>
+        </section>
+        """
+
+    def _render_ranger_home(
+        self,
+        user: User,
+        assignment: Optional[TruckAssignment],
+        assignment_truck: Optional[Truck],
+        inspections: list[dict[str, Any]],
+    ) -> str:
+        trucks = self.service.list_trucks()
+        active_assignments = {assignment.truck_id: assignment for assignment in self.service.list_active_assignments()}
+        reservations = {reservation.truck_id: reservation for reservation in self.service.list_truck_reservations()}
+        can_checkout = assignment is None
+        fleet_trucks = [
+            truck
             for truck in trucks
-        ) or "<p class=\"muted\">No trucks available.</p>"
+            if not (assignment and assignment.truck_id == truck.id)
+        ]
+        fleet_cards = "".join(
+            self._render_truck_card(
+                viewer=user,
+                truck=truck,
+                assignment=active_assignments.get(truck.id),
+                reservation=reservations.get(truck.id),
+                allow_checkout=can_checkout,
+            )
+            for truck in fleet_trucks
+        )
+        if not fleet_cards:
+            fleet_cards = "<p class=\"muted\">No trucks configured.</p>"
+
+        assignment_html = ""
+        if assignment and assignment_truck:
+            assignment_html = self._render_assignment_card(assignment_truck, assignment)
+
         inspections_html = self._render_inspection_table("Your recent inspections", inspections)
         return f"""
         <section class=\"card\">
           <h1>Welcome, {html.escape(user.name)}!</h1>
-          <p>Select a truck to begin a quick or detailed inspection.</p>
-          <div class=\"grid\">{truck_cards}</div>
+          <p>Select an available truck to check out or return your current vehicle.</p>
+          {assignment_html}
+          <div class=\"grid\">{fleet_cards}</div>
         </section>
         {inspections_html}
         """
 
-    def _render_inspection_table(self, heading: str, inspections: list[dict[str, Any]]) -> str:
+    def _render_supervisor_home(
+        self,
+        user: User,
+        trucks: list[Truck],
+        active_assignments: dict[int, TruckAssignment],
+        inspections: list[dict[str, Any]],
+        assignment: Optional[TruckAssignment],
+        assignment_truck: Optional[Truck],
+    ) -> str:
+        reservations = {reservation.truck_id: reservation for reservation in self.service.list_truck_reservations()}
+        fleet_trucks = [
+            truck
+            for truck in trucks
+            if not (assignment and assignment.truck_id == truck.id)
+        ]
+        cards = "".join(
+            self._render_truck_card(
+                viewer=user,
+                truck=truck,
+                assignment=active_assignments.get(truck.id),
+                reservation=reservations.get(truck.id),
+                allow_checkout=reservations.get(truck.id) is None and active_assignments.get(truck.id) is None,
+            )
+            for truck in fleet_trucks
+        )
+        if not cards:
+            cards = "<p class=\"muted\">No trucks configured.</p>"
+        inspections_html = self._render_inspection_table("All inspections", inspections, export_link=True)
+        assignment_html = ""
+        if assignment and assignment_truck:
+            assignment_html = self._render_assignment_card(assignment_truck, assignment)
+        return f"""
+        <section class=\"card\">
+          <h1>Fleet overview</h1>
+          {assignment_html}
+          <div class=\"grid\">{cards}</div>
+        </section>
+        {inspections_html}
+        """
+
+    def _render_assignment_card(self, truck: Truck, assignment: TruckAssignment) -> str:
+        profile = self._truck_profile(truck)
+        graphic_class = f"truck-card__graphic truck-card__graphic--{profile['badge_class']}"
+        icon_html = profile["icon"]
+        checked_out_at = assignment.checked_out_at.strftime("%Y-%m-%d %H:%M")
+        return_url = f"/trucks/{truck.id}/inspect/{InspectionType.RETURN.value}?action=return&assignment={assignment.id}"
+        return f"""
+        <article class=\"card truck-card truck-card--assignment\">
+          <div class=\"{graphic_class}\">{icon_html}</div>
+          <h2>{html.escape(truck.identifier)} (Checked out)</h2>
+          <p class=\"muted\">Started {checked_out_at} · Start miles: {assignment.start_miles}</p>
+          <div class=\"actions\">
+            <a class=\"button\" href=\"{return_url}\">Return vehicle</a>
+          </div>
+        </article>
+        """
+
+    def _render_truck_card(
+        self,
+        viewer: User,
+        truck: Truck,
+        assignment: Optional[TruckAssignment],
+        reservation: Optional[TruckReservation],
+        *,
+        allow_checkout: bool,
+    ) -> str:
+        profile = self._truck_profile(truck)
+        graphic_class = f"truck-card__graphic truck-card__graphic--{profile['badge_class']}"
+        icon_html = profile["icon"]
+        actions: list[str] = []
+        status_messages: list[str] = []
+        if assignment:
+            assigned_ranger = self.service.database.get_user(assignment.ranger_id)
+            assigned_label = self._ranger_identifier(assigned_ranger, assignment.ranger_id)
+            status_messages.append(
+                f"Checked out by {assigned_label} since {assignment.checked_out_at.strftime('%Y-%m-%d %H:%M')}"
+            )
+            if assignment.ranger_id == viewer.id:
+                return_url = (
+                    f"/trucks/{truck.id}/inspect/{InspectionType.RETURN.value}?action=return&assignment={assignment.id}"
+                )
+                actions.append(f'<a class="button" href="{return_url}">Return vehicle</a>')
+        else:
+            if allow_checkout:
+                quick_url = (
+                    f"/trucks/{truck.id}/inspect/{InspectionType.QUICK.value}?action=checkout"
+                )
+                detailed_url = (
+                    f"/trucks/{truck.id}/inspect/{InspectionType.DETAILED.value}?action=checkout"
+                )
+                actions.append(f'<a class="button" href="{quick_url}">Quick inspection</a>')
+                actions.append(
+                    f'<a class="button secondary" href="{detailed_url}">Detailed inspection</a>'
+                )
+            else:
+                status_messages.append("Return your current vehicle to check out another.")
+
+        reservation_notice = ""
+        reservation_controls = ""
+        can_reserve = allow_checkout and assignment is None
+        if reservation:
+            reserved_user = self.service.database.get_user(reservation.user_id)
+            base_text = self._reservation_default_for_user(reserved_user)
+            if not base_text:
+                base_text = f"Reserved by {self._ranger_identifier(reserved_user, reservation.user_id)}"
+            message = html.escape(base_text)
+            default_note = self._reservation_default_for_user(reserved_user)
+            if reservation.note and not (default_note and reservation.note == default_note):
+                message += f' — "{html.escape(reservation.note)}"'
+            reservation_notice = f'<p class="reservation-note">{message}</p>'
+            if reservation.user_id == viewer.id:
+                current_note = ""
+                if reservation.note and not (default_note and reservation.note == default_note):
+                    current_note = reservation.note
+                note_value = html.escape(current_note)
+                reservation_controls = f"""
+                <div class=\"reserve-controls\">
+                  <form method=\"post\" action=\"/trucks/{truck.id}/reserve\" class=\"reserve-form\">
+                    <input type=\"hidden\" name=\"reserve_action\" value=\"update\" />
+                    <input type=\"text\" name=\"reserve_note\" maxlength=\"80\" value=\"{note_value}\" placeholder=\"Add a note (80 chars)\" />
+                    <button type=\"submit\" class=\"button secondary\">Save note</button>
+                  </form>
+                  <form method=\"post\" action=\"/trucks/{truck.id}/reserve\" class=\"reserve-trigger reserve-cancel\">
+                    <input type=\"hidden\" name=\"reserve_action\" value=\"cancel\" />
+                    <button type=\"submit\" class=\"button secondary\">Cancel reservation</button>
+                  </form>
+                </div>
+                """
+                can_reserve = False
+        elif can_reserve:
+            reservation_controls = f"""
+            <div class=\"reserve-controls\">
+              <form method=\"post\" action=\"/trucks/{truck.id}/reserve\" class=\"reserve-trigger\">
+                <input type=\"hidden\" name=\"reserve_action\" value=\"reserve\" />
+                <button type=\"submit\" class=\"button secondary\">Reserve</button>
+              </form>
+            </div>
+            """
+
+        actions_html = ''.join(actions) if actions else ''
+        status_html = ''.join(f'<p class="muted">{html.escape(text)}</p>' for text in status_messages)
+        return f"""
+        <article class=\"card truck-card\">
+          <div class=\"{graphic_class}\">{icon_html}</div>
+          <h2>{html.escape(truck.identifier)}</h2>
+          {status_html}
+          {reservation_notice}
+          <div class=\"actions\">{actions_html}</div>
+          {reservation_controls}
+        </article>
+        """
+
+    def _render_truck_legend(self, trucks: list[Truck]) -> str:
+        return ""
+
+    def _render_inspection_table(
+        self,
+        heading: str,
+        inspections: list[dict[str, Any]],
+        *,
+        export_link: bool = False,
+    ) -> str:
+        actions_html = ""
+        if export_link:
+            actions_html = (
+                '<div class="table-actions">'
+                '<div class="actions"><a class="button" href="/inspections/export">Download Excel export</a></div>'
+                '<p class="export-hint muted">Generates a workbook with summary insights and full inspection detail.</p>'
+                '</div>'
+            )
         if not inspections:
-            return f"<section class=\"card\"><h2>{html.escape(heading)}</h2><p class=\"muted\">No inspections recorded yet.</p></section>"
-        rows = []
+            return (
+                f'<section class="card"><h2>{html.escape(heading)}</h2>'
+                f'{actions_html}<p class="muted">No inspections recorded yet.</p></section>'
+            )
+        rows: list[str] = []
         for item in inspections:
             inspection = item["inspection"]
-            truck = item["truck"]
-            ranger = item["ranger"]
+            truck_obj = item.get("truck")
+            ranger_obj = item.get("ranger")
+            truck_label = html.escape(truck_obj.identifier) if truck_obj else f"Truck {inspection.truck_id}"
+            ranger_label = html.escape(ranger_obj.name) if ranger_obj else f"Ranger {inspection.ranger_id}"
             escalated = (
                 "<span class=\"badge badge-alert\">Escalated</span>"
                 if inspection.escalate_visibility
                 else "<span class=\"badge\">Normal</span>"
             )
-
             rows.append(
                 """
                 <tr>
@@ -490,99 +1380,174 @@ class TruckInspectionWebApp:
                 """.format(
                     id=inspection.id,
                     type=html.escape(inspection.inspection_type.value.title()),
-                    truck=html.escape(truck.identifier),
-                    ranger=html.escape(ranger.name),
+                    truck=truck_label,
+                    ranger=ranger_label,
                     created=inspection.created_at.strftime("%Y-%m-%d %H:%M"),
                     escalated=escalated,
-
                 )
             )
+        table_rows = "".join(rows)
         return f"""
         <section class=\"card\">
           <h2>{html.escape(heading)}</h2>
+          {actions_html}
           <table class=\"inspection-table\">
             <thead><tr><th>ID</th><th>Type</th><th>Truck</th><th>Ranger</th><th>Created</th><th>Escalated</th><th></th></tr></thead>
-            <tbody>{''.join(rows)}</tbody>
+            <tbody>{table_rows}</tbody>
           </table>
         </section>
         """
 
-    def _render_inspection_form(self, truck: Truck, inspection_type: InspectionType, fields: Iterable[Any]) -> str:
+    def _render_inspection_form(
+        self,
+        truck: Truck,
+        inspection_type: InspectionType,
+        fields: Iterable[Any],
+        action: str,
+        assignment_id: Optional[int],
+        preserved: dict[str, Any] | None = None,
+    ) -> str:
+        preserved = preserved or {}
         field_html: list[str] = []
         for field in fields:
             label = html.escape(field.label)
             if field.field_type is FieldType.BOOLEAN:
+                yes_checked = "checked" if preserved.get(field.id) == "yes" else ""
+                no_checked = "checked" if preserved.get(field.id) == "no" else ""
                 field_html.append(
                     f"""
                     <div class=\"form-field\">
                       <label>{label}</label>
-                      <div class=\"radio-group\">
-                        <label><input type=\"radio\" name=\"{field.id}\" value=\"yes\" required /> Yes</label>
-                        <label><input type=\"radio\" name=\"{field.id}\" value=\"no\" required /> No</label>
+                      <div class=\"radio-group\" role=\"radiogroup\" aria-label=\"{label}\">
+                        <label class=\"radio-option\">
+                          <input type=\"radio\" name=\"{field.id}\" value=\"yes\" {yes_checked} required />
+                          <span>Yes</span>
+                        </label>
+                        <label class=\"radio-option\">
+                          <input type=\"radio\" name=\"{field.id}\" value=\"no\" {no_checked} required />
+                          <span>No</span>
+                        </label>
                       </div>
                     </div>
                     """
                 )
             elif field.field_type is FieldType.TEXT:
                 if field.id == "fuel_level":
+                    fuel_value = preserved.get(field.id)
+                    if fuel_value is None:
+                        fuel_value = "50"
+                    slider_value = html.escape(str(fuel_value))
+                    ticks: list[str] = []
+                    for tick_index in range(9):
+                        value = tick_index * 12.5
+                        angle = -90 + (value / 100) * 180
+                        tick_class = "gauge-tick gauge-tick--major" if tick_index % 2 == 0 else "gauge-tick gauge-tick--minor"
+                        ticks.append(
+                            f'<span class="{tick_class}" style="--tick-rotation:{angle:.6f}deg"></span>'
+                        )
                     field_html.append(
                         f"""
                         <div class=\"form-field fuel-field\">
                           <label>{label}</label>
                           <div class=\"fuel-gauge\" data-fuel-gauge>
-                            <div class=\"gauge-dial\">
-                              <div class=\"gauge-needle\"></div>
+                            <div class=\"gauge-dial\" data-fuel-dial role=\"slider\" tabindex=\"0\" aria-label=\"{label}\" aria-valuemin=\"0\" aria-valuemax=\"100\" aria-valuenow=\"{slider_value}\">
+                              <div class=\"gauge-ticks\">{''.join(ticks)}</div>
+                              <div class=\"gauge-needle\" data-fuel-needle></div>
                               <div class=\"gauge-center\"></div>
                               <div class=\"gauge-labels\"><span>E</span><span>1/2</span><span>F</span></div>
                             </div>
-                            <input type=\"range\" min=\"0\" max=\"100\" step=\"5\" value=\"50\" data-fuel-slider />
                           </div>
-                          <div class=\"fuel-reading\"><span data-fuel-value>50%</span></div>
-                          <input type=\"hidden\" id=\"{field.id}\" name=\"{field.id}\" value=\"50\" required />
+                          <div class=\"fuel-reading\"><span data-fuel-value>{slider_value}%</span></div>
+                          <input type=\"hidden\" id=\"{field.id}\" name=\"{field.id}\" value=\"{slider_value}\" required />
                         </div>
                         """
                     )
                 else:
                     required = " required" if field.required else ""
+                    value = html.escape(str(preserved.get(field.id, "")))
                     field_html.append(
                         f"""
                         <div class=\"form-field\">
                           <label for=\"{field.id}\">{label}</label>
-                          <textarea id=\"{field.id}\" name=\"{field.id}\"{required}></textarea>
+                          <textarea id=\"{field.id}\" name=\"{field.id}\"{required}>{value}</textarea>
                         </div>
                         """
                     )
             elif field.field_type is FieldType.NUMBER:
                 required = " required" if field.required else ""
+                value = html.escape(str(preserved.get(field.id, ""))) if field.id in preserved else ""
+                value_attr = f" value=\"{value}\"" if value else ""
                 field_html.append(
                     f"""
                     <div class=\"form-field\">
                       <label for=\"{field.id}\">{label}</label>
-                      <input type=\"number\" id=\"{field.id}\" name=\"{field.id}\"{required} />
+                      <input type=\"number\" id=\"{field.id}\" name=\"{field.id}\"{value_attr}{required} />
                     </div>
                     """
                 )
-        return f"""
-        <section class=\"card\">
-          <h1>{inspection_type.value.title()} inspection for {html.escape(truck.identifier)}</h1>
-          <form method=\"post\" class=\"form\" enctype=\"multipart/form-data\">
-            {''.join(field_html)}
+        escalate_checked = "active" if preserved.get("escalate_visibility") == "1" else ""
+        escalate_pressed = "true" if preserved.get("escalate_visibility") == "1" else "false"
+        escalate_value = preserved.get("escalate_visibility", "0")
+        action_value = html.escape(str(preserved.get("action", action)))
+        assignment_value = preserved.get("assignment_id") or (str(assignment_id) if assignment_id is not None else None)
+        assignment_input = (
+            f'<input type="hidden" name="assignment_id" value="{html.escape(str(assignment_value))}" />'
+            if assignment_value
+            else ""
+        )
+        title_prefix = "Check out" if action_value == "checkout" else "Return"
+        photos_section = ""
+        escalate_section = ""
+        if action_value != "return":
+            photos_section = (
+                """
             <div class=\"form-field\">
               <label for=\"photos\">Vehicle photos <span class=\"muted\">(Capture or upload 4-10 images)</span></label>
               <input type=\"file\" id=\"photos\" name=\"photos\" accept=\"image/*\" capture=\"environment\" multiple required />
             </div>
-            <div class=\"form-field escalate-field\">
-              <input type=\"hidden\" name=\"escalate_visibility\" id=\"escalate_visibility\" value=\"0\" />
-              <button type=\"button\" class=\"escalate-button\" data-escalate-toggle data-target=\"escalate_visibility\" aria-pressed=\"false\">
-                Escalate to supervisors
-              </button>
-              <p class=\"muted small\">Use when immediate supervisor attention is required.</p>
-            </div>
-            <button type=\"submit\" class=\"primary-action\">Submit inspection</button>
+                """
+            )
+        else:
+            photos_section = ""
 
+        escalate_section = (
+            f"""
+        <div class=\"form-field escalate-field\">
+          <input type=\"hidden\" name=\"escalate_visibility\" id=\"escalate_visibility\" value=\"{escalate_value}\" />
+          <button type=\"button\" class=\"escalate-button {escalate_checked}\" data-escalate-toggle data-target=\"escalate_visibility\" aria-pressed=\"{escalate_pressed}\">
+            Escalate to supervisors
+          </button>
+          <p class=\"muted small\">Use when immediate supervisor attention is required.</p>
+        </div>
+            """
+        )
+        return f"""
+        <section class=\"card\">
+          <h1>{title_prefix} {inspection_type.value.title()} inspection for {html.escape(truck.identifier)}</h1>
+          <form method=\"post\" class=\"form\" enctype=\"multipart/form-data\">
+            {''.join(field_html)}
+            <input type=\"hidden\" name=\"__preserve__\" value=\"1\" />
+            <input type=\"hidden\" name=\"action\" value=\"{action_value}\" />
+            {assignment_input}
+            {photos_section}
+            {escalate_section}
+            <button type=\"submit\" class=\"primary-action\">Submit inspection</button>
           </form>
         </section>
         """
+
+    def _preserve_form_state(self, request: Request) -> dict[str, str]:
+        if request.method != "POST":
+            return {}
+        preserved: dict[str, str] = {}
+        for key, values in request.form.items():
+            if not values or key == "__preserve__":
+                continue
+            preserved[key] = values[0]
+        escalate = request.form_value("escalate_visibility")
+        if escalate is not None:
+            preserved["escalate_visibility"] = escalate
+        return preserved
 
     def _render_inspection_detail(self, user: User, view: dict[str, Any]) -> str:
         inspection: Inspection = view["inspection"]
@@ -598,7 +1563,6 @@ class TruckInspectionWebApp:
                     display = "Yes" if value else "No"
                 elif field.id == "fuel_level":
                     display = f"{html.escape(str(value))}%"
-
                 else:
                     display = html.escape(str(value))
                 response_items.append(f"<li><strong>{html.escape(field.label)}:</strong> {display}</li>")
@@ -614,10 +1578,21 @@ class TruckInspectionWebApp:
                 </li>
                 """
             )
+        can_download = user.role == UserRole.SUPERVISOR or inspection.ranger_id == user.id
         photos = "".join(
-            f"<li><img src=\"{html.escape(url)}\" alt=\"Vehicle photo {index + 1}\" loading=\"lazy\" /></li>"
+            f"""
+            <li>
+              <button type=\"button\" class=\"photo-thumb\" data-photo-src=\"{html.escape(url)}\" aria-label=\"View vehicle photo {index + 1}\">
+                <img src=\"{html.escape(url)}\" alt=\"Vehicle photo {index + 1}\" loading=\"lazy\" />
+              </button>
+              {(
+                f'<div class="photo-thumb__actions"><a href="{html.escape(url)}" download class="photo-thumb__download">Download</a></div>'
+                if can_download
+                else ''
+              )}
+            </li>
+            """
             for index, url in enumerate(inspection.photo_urls)
-
         )
         note_form = f"""
         <form method=\"post\" action=\"/inspections/{inspection.id}/notes\" class=\"form\">
@@ -629,6 +1604,24 @@ class TruckInspectionWebApp:
         if user.role == UserRole.RANGER and inspection.ranger_id != user.id:
             note_form = ""
         notes_html = '<ul class="notes">' + ''.join(note_items) + '</ul>' if note_items else '<p class="muted">No notes yet.</p>'
+        viewer_download = (
+            """
+            <a href=\"\" download class=\"photo-viewer__download\" data-photo-download hidden>Download</a>
+            """
+            if can_download
+            else ""
+        )
+
+        photo_viewer = """
+        <div class=\"photo-viewer\" data-photo-viewer hidden aria-hidden=\"true\" role=\"dialog\" aria-modal=\"true\" aria-label=\"Inspection photo viewer\" tabindex=\"-1\">
+          <div class=\"photo-viewer__backdrop\" data-photo-close></div>
+          <figure class=\"photo-viewer__figure\">
+            <button type=\"button\" class=\"photo-viewer__close\" data-photo-close aria-label=\"Close photo\">&times;</button>
+            <img src=\"\" alt=\"Inspection photo\" data-photo-image />
+            {viewer_download}
+          </figure>
+        </div>
+        """
 
         return f"""
         <section class=\"card\">
@@ -644,8 +1637,8 @@ class TruckInspectionWebApp:
           <ul class=\"responses\">{''.join(response_items)}</ul>
           <h2>Photos</h2>
           <ul class=\"photo-list\">{photos}</ul>
-
         </section>
+        {photo_viewer}
         <section class=\"card\">
           <h2>Notes</h2>
           {notes_html}
@@ -654,20 +1647,22 @@ class TruckInspectionWebApp:
         """
 
     def _render_dashboard(self, metrics: dict[str, Any], inspections: list[dict[str, Any]]) -> str:
-        ranger_rows = []
-        for entry in metrics["ranger_metrics"]:
+        personnel_rows = []
+        for entry in metrics["personnel_metrics"]:
+            user = entry["user"]
+            role_label = "Ranger" if user.role == UserRole.RANGER else "Supervisor"
             recent = entry["most_recent_inspection"]
             recent_text = recent.strftime("%Y-%m-%d %H:%M") if recent else "<span class=\"muted\">No inspections</span>"
-            ranger_rows.append(
-                f"<tr><td>{html.escape(entry['ranger'].name)}</td><td>{entry['inspections_completed']}</td><td>{recent_text}</td></tr>"
+            personnel_rows.append(
+                f"<tr><td>{html.escape(user.name)}</td><td>{role_label}</td><td>{entry['inspections_completed']}</td><td>{recent_text}</td></tr>"
             )
-        ranger_table = """
+        personnel_table = """
         <table class=\"inspection-table\">
-          <thead><tr><th>Ranger</th><th>Completed</th><th>Most recent</th></tr></thead>
+          <thead><tr><th>Name</th><th>Role</th><th>Completed</th><th>Most recent</th></tr></thead>
           <tbody>{rows}</tbody>
         </table>
-        """.format(rows="".join(ranger_rows))
-        inspection_table = self._render_inspection_table("All inspections", inspections)
+        """.format(rows="".join(personnel_rows))
+        inspection_table = self._render_inspection_table("All inspections", inspections, export_link=True)
         return f"""
         <section class=\"card\">
           <h1>Supervisor dashboard</h1>
@@ -675,8 +1670,8 @@ class TruckInspectionWebApp:
             <div class=\"metric\"><span class=\"label\">Total inspections</span><span class=\"value\">{metrics['total_inspections']}</span></div>
             <div class=\"metric\"><span class=\"label\">Escalated</span><span class=\"value\">{metrics['escalated_inspections']}</span></div>
           </div>
-          <h2>Ranger compliance</h2>
-          {ranger_table}
+          <h2>Team compliance</h2>
+          {personnel_table}
         </section>
         {inspection_table}
         """
@@ -714,6 +1709,26 @@ class TruckInspectionWebApp:
                 responses[field.id] = int(cleaned)
         return responses
 
+    def _truck_profile(self, truck: Truck) -> dict[str, str]:
+        identifier = truck.identifier.upper()
+        category = TRUCK_CATEGORY_MAP.get(identifier)
+        if category is None:
+            if identifier.startswith("S"):
+                category = "full_size"
+            elif identifier.startswith("P") or identifier.isdigit():
+                category = "mid_size"
+            elif identifier.startswith("T"):
+                category = "maintenance"
+            else:
+                category = "default"
+        info = TRUCK_CATEGORY_INFO.get(category, TRUCK_CATEGORY_INFO["default"])
+        return {
+            "category": category,
+            "label": info["label"],
+            "badge_class": info["badge_class"],
+            "icon": info["icon"].strip(),
+        }
+
     def _collect_photos(self, request: Request) -> list[str]:
         uploads = request.file_values("photos")
         if len(uploads) < 4 or len(uploads) > 10:
@@ -731,7 +1746,6 @@ class TruckInspectionWebApp:
             path.write_bytes(upload.data)
             saved.append(f"/uploads/{filename}")
         return saved
-
 
     def _build_inspection_view(self, inspection: Inspection, include_notes: bool = False) -> dict[str, Any]:
         truck = self.service.get_truck(inspection.truck_id)
@@ -757,5 +1771,22 @@ def create_app(database_path: Optional[Path | str] = None) -> TruckInspectionWeb
 app = create_app()
 
 
+def main() -> None:  # pragma: no cover - convenience wrapper
+    parser = argparse.ArgumentParser(description="Run the Truck Inspection web app")
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Interface to bind (use 0.0.0.0 to allow other devices on the network)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port to listen on (default: 8000)",
+    )
+    args = parser.parse_args()
+    app.run(host=args.host, port=args.port)
+
+
 if __name__ == "__main__":  # pragma: no cover - manual execution helper
-    app.run()
+    main()

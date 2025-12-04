@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import base64
 from http import HTTPStatus
 from http.cookies import SimpleCookie
+import io
 import secrets
 from pathlib import Path
 from urllib.parse import urlencode
@@ -11,6 +13,11 @@ import pytest
 from backend.app.forms import FieldType, get_form_definition
 from backend.app.models import InspectionType
 from frontend.app import Request, create_app
+
+_SAMPLE_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAvoB9pWcVYoAAAAASUVORK5CYII="
+)
+from openpyxl import load_workbook
 
 
 class FrontendClient:
@@ -97,15 +104,15 @@ def login(client: FrontendClient, email: str, password: str):
 
 
 def test_ranger_login_and_dashboard(client: FrontendClient):
-    response = login(client, "alex.ranger@example.com", "rangerpass")
-    assert "Welcome, Alex Ranger!" in response.body
-    assert "Quick report" in response.body
+    response = login(client, "ranger@email.com", "password")
+    assert "Welcome, Sample Ranger!" in response.body
+    assert "Check out (Quick)" in response.body
 
 
 def test_submit_quick_inspection(app, client: FrontendClient):
-    login(client, "alex.ranger@example.com", "rangerpass")
+    login(client, "ranger@email.com", "password")
     service = app.service
-    user = service.database.get_user_by_email("alex.ranger@example.com")
+    user = service.database.get_user_by_email("ranger@email.com")
     assert user is not None
     truck = service.list_trucks()[0]
 
@@ -122,6 +129,7 @@ def test_submit_quick_inspection(app, client: FrontendClient):
         elif field.field_type is FieldType.NUMBER:
             form_data[field.id] = "123"
     form_data["escalate_visibility"] = "0"
+    form_data["action"] = "checkout"
 
     files = {
         "photos": [
@@ -132,12 +140,12 @@ def test_submit_quick_inspection(app, client: FrontendClient):
 
     response = client.request(
         "POST",
-        f"/trucks/{truck.id}/inspect/{InspectionType.QUICK.value}",
+        f"/trucks/{truck.id}/inspect/{InspectionType.QUICK.value}?action=checkout",
         data=form_data,
         files=files,
         follow_redirects=True,
     )
-    assert "Inspection submitted successfully" in response.body
+    assert "Truck checked out successfully" in response.body
     assert f"Inspection" in response.body
 
     inspections = service.list_inspections(requester=user)
@@ -146,9 +154,273 @@ def test_submit_quick_inspection(app, client: FrontendClient):
     assert inspections[0].inspection_type is InspectionType.QUICK
     assert all(photo.startswith("/uploads/") for photo in inspections[0].photo_urls)
 
+    assignment = service.get_active_assignment_for_ranger(user)
+    assert assignment is not None
+    assert assignment.truck_id == truck.id
+    assert assignment.start_miles == 123
+
 
 def test_supervisor_dashboard(client: FrontendClient):
-    login(client, "sam.supervisor@example.com", "supervisorpass")
+    login(client, "supervisor@email.com", "password")
     response = client.request("GET", "/dashboard")
     assert response.status == HTTPStatus.OK
     assert "Supervisor dashboard" in response.body
+
+
+def test_supervisor_can_download_export(app, client: FrontendClient):
+    login(client, "supervisor@email.com", "password")
+    service = app.service
+    ranger_user = service.database.get_user_by_email("ranger@email.com")
+    assert ranger_user is not None
+    truck = service.list_trucks()[0]
+    photo_urls: list[str] = []
+    for index in range(1, 5):
+        photo_path = app.upload_dir / f"export-preview-{index}.png"
+        photo_path.write_bytes(_SAMPLE_PNG)
+        photo_urls.append(f"/uploads/{photo_path.name}")
+    service.submit_inspection(
+        user=ranger_user,
+        truck=truck,
+        inspection_type=InspectionType.QUICK,
+        responses={
+            "exterior_clean": True,
+            "interior_clean": False,
+            "seatbelts_functioning": True,
+            "tire_inflation": True,
+            "fuel_level": "65",
+            "odometer_miles": 1400,
+        },
+        photo_urls=photo_urls,
+        escalate_visibility=True,
+    )
+
+    response = client.request("GET", "/inspections/export")
+    assert response.status == HTTPStatus.OK
+    headers = {name.lower(): value for name, value in response.headers}
+    assert headers.get("content-type") == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert "attachment" in headers.get("content-disposition", "")
+    assert isinstance(response.body, (bytes, bytearray))
+
+    workbook = load_workbook(io.BytesIO(response.body))
+    assert set(workbook.sheetnames) >= {"Summary", "Inspections"}
+    detail = workbook["Inspections"]
+    assert detail.max_row >= 2
+    types = {detail.cell(row=row, column=3).value for row in range(2, detail.max_row + 1)}
+    assert "Quick" in types
+    escalations = {detail.cell(row=row, column=6).value for row in range(2, detail.max_row + 1)}
+    assert "Yes" in escalations
+    photos_ws = workbook["Photos"]
+    assert len(getattr(photos_ws, "_images", [])) >= 4
+
+
+def test_incomplete_inspection_preserves_form(app, client: FrontendClient):
+    login(client, "ranger@email.com", "password")
+    service = app.service
+    user = service.database.get_user_by_email("ranger@email.com")
+    assert user is not None
+    truck = service.list_trucks()[0]
+
+    form_definition = get_form_definition(InspectionType.QUICK)
+    form_data: dict[str, str] = {}
+    for field in form_definition:
+        if field.field_type is FieldType.BOOLEAN:
+            form_data[field.id] = "yes"
+        elif field.field_type is FieldType.TEXT:
+            if field.id == "fuel_level":
+                form_data[field.id] = "75"
+            else:
+                form_data[field.id] = "All good"
+        elif field.field_type is FieldType.NUMBER:
+            form_data[field.id] = "123"
+    form_data["escalate_visibility"] = "1"
+    form_data["action"] = "checkout"
+
+    response = client.request(
+        "POST",
+        f"/trucks/{truck.id}/inspect/{InspectionType.QUICK.value}?action=checkout",
+        data=form_data,
+        follow_redirects=False,
+    )
+
+    assert response.status == HTTPStatus.OK
+    assert "Please provide between 4 and 10 photos." in response.body
+    assert "name=\"exterior_clean\" value=\"yes\" checked" in response.body
+    assert "data-fuel-value>75%" in response.body
+    assert "escalate_visibility\" id=\"escalate_visibility\" value=\"1\"" in response.body
+    assert "aria-pressed=\"true\"" in response.body
+
+
+def test_ranger_can_return_truck(app, client: FrontendClient):
+    login(client, "ranger@email.com", "password")
+    service = app.service
+    user = service.database.get_user_by_email("ranger@email.com")
+    assert user is not None
+    truck = service.list_trucks()[0]
+
+    # Checkout the truck first
+    checkout_form = get_form_definition(InspectionType.QUICK)
+    checkout_data: dict[str, str] = {}
+    for field in checkout_form:
+        if field.field_type is FieldType.BOOLEAN:
+            checkout_data[field.id] = "yes"
+        elif field.field_type is FieldType.TEXT:
+            checkout_data[field.id] = "72" if field.id == "fuel_level" else "Initial notes"
+        elif field.field_type is FieldType.NUMBER:
+            checkout_data[field.id] = "1000"
+    checkout_data["escalate_visibility"] = "0"
+    checkout_data["action"] = "checkout"
+
+    checkout_files = {
+        "photos": [
+            (f"start-{index}.jpg", b"startdata", "image/jpeg")
+            for index in range(1, 5)
+        ]
+    }
+
+    checkout_response = client.request(
+        "POST",
+        f"/trucks/{truck.id}/inspect/{InspectionType.QUICK.value}?action=checkout",
+        data=checkout_data,
+        files=checkout_files,
+        follow_redirects=True,
+    )
+    assert "Truck checked out successfully" in checkout_response.body
+
+    assignment = service.get_active_assignment_for_ranger(user)
+    assert assignment is not None
+
+    # Return the truck with higher mileage (no photos required)
+    return_form = get_form_definition(InspectionType.RETURN)
+    return_data: dict[str, str] = {}
+    for field in return_form:
+        if field.field_type is FieldType.NUMBER:
+            return_data[field.id] = "1010"
+        elif field.field_type is FieldType.TEXT:
+            return_data[field.id] = "All clear"
+    return_data["action"] = "return"
+    return_data["assignment_id"] = str(assignment.id)
+
+    return_response = client.request(
+        "POST",
+        f"/trucks/{truck.id}/inspect/{InspectionType.RETURN.value}?action=return&assignment={assignment.id}",
+        data=return_data,
+        files=None,
+        follow_redirects=True,
+    )
+    assert "Truck returned successfully" in return_response.body
+
+    updated_assignment = service.database.get_assignment(assignment.id)
+    assert updated_assignment is not None
+    assert updated_assignment.returned_at is not None
+    assert updated_assignment.end_miles == 1010
+
+    available_ids = {truck.id for truck in service.list_available_trucks()}
+    assert assignment.truck_id in available_ids
+
+    inspections = service.list_inspections(requester=user)
+    assert inspections[0].inspection_type is InspectionType.RETURN
+
+
+def test_register_and_password_update(app, client: FrontendClient):
+    response = client.request(
+        "POST",
+        "/register",
+        data={
+            "name": "Test User",
+            "email": "test@email.com",
+            "ranger_number": "RN-5001",
+            "password": "summer123",
+            "confirm_password": "summer123",
+        },
+        follow_redirects=True,
+    )
+    assert "Account created" in response.body
+
+    response = client.request(
+        "POST",
+        "/password",
+        data={
+            "email": "test@email.com",
+            "password": "newpass456",
+            "confirm_password": "newpass456",
+        },
+        follow_redirects=True,
+    )
+    assert "Password updated" in response.body
+
+
+def test_account_update(app, client: FrontendClient):
+    login(client, "ranger@email.com", "password")
+    response = client.request(
+        "POST",
+        "/account",
+        data={
+            "name": "Alex Updated",
+            "ranger_number": "RN-1001",
+            "password": "newpass123",
+            "confirm_password": "newpass123",
+        },
+        follow_redirects=True,
+    )
+    assert "Account details updated" in response.body
+
+    updated = app.service.database.get_user_by_email("ranger@email.com")
+    assert updated is not None
+    assert updated.name == "Alex Updated"
+    assert updated.ranger_number == "RN-1001"
+
+    client.request("GET", "/logout", follow_redirects=True)
+    relog = client.request(
+        "POST",
+        "/login",
+        data={"email": "ranger@email.com", "password": "newpass123"},
+        follow_redirects=True,
+    )
+    assert "Welcome, Alex Updated!" in relog.body
+
+
+def test_supervisor_can_submit_inspection(app, client: FrontendClient):
+    response = login(client, "supervisor@email.com", "password")
+    assert "Quick inspection" in response.body
+
+    service = app.service
+    user = service.database.get_user_by_email("supervisor@email.com")
+    assert user is not None
+    truck = service.list_trucks()[0]
+
+    form_definition = get_form_definition(InspectionType.QUICK)
+    form_data: dict[str, str] = {}
+    for field in form_definition:
+        if field.field_type is FieldType.BOOLEAN:
+            form_data[field.id] = "yes"
+        elif field.field_type is FieldType.TEXT:
+            if field.id == "fuel_level":
+                form_data[field.id] = "80"
+            else:
+                form_data[field.id] = "Supervisor check"
+        elif field.field_type is FieldType.NUMBER:
+            form_data[field.id] = "456"
+    form_data["escalate_visibility"] = "0"
+    form_data["action"] = "checkout"
+
+    files = {
+        "photos": [
+            (f"photo-{index}.jpg", b"binarydata", "image/jpeg")
+            for index in range(1, 5)
+        ]
+    }
+
+    response = client.request(
+        "POST",
+        f"/trucks/{truck.id}/inspect/{InspectionType.QUICK.value}?action=checkout",
+        data=form_data,
+        files=files,
+        follow_redirects=True,
+    )
+    assert "Truck checked out successfully" in response.body
+
+    inspections = service.list_inspections(requester=user, ranger=user)
+    assert inspections
+    latest = inspections[-1]
+    assert latest.truck_id == truck.id
+    assert latest.inspection_type is InspectionType.QUICK

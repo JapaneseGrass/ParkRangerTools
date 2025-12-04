@@ -11,7 +11,6 @@ class UserRole(str, Enum):
     SUPERVISOR = "supervisor"
 
 
-
 @dataclass
 class User:
     id: int
@@ -20,7 +19,8 @@ class User:
     password_hash: str
     role: UserRole
     created_at: datetime
-
+    ranger_number: Optional[str] = None
+    security_questions: Optional[list[dict[str, str]]] = None
 
 
 @dataclass
@@ -34,9 +34,7 @@ class Truck:
 class InspectionType(str, Enum):
     QUICK = "quick"
     DETAILED = "detailed"
-
-
-
+    RETURN = "return"
 
 @dataclass
 class Inspection:
@@ -52,8 +50,6 @@ class Inspection:
     updated_at: datetime
 
 
-
-
 @dataclass
 class InspectionNote:
     id: int
@@ -64,10 +60,31 @@ class InspectionNote:
 
 
 @dataclass
-
 class SessionToken:
     id: int
     user_id: int
     token: str
     created_at: datetime
     expires_at: datetime
+
+
+@dataclass
+class TruckAssignment:
+    id: int
+    truck_id: int
+    ranger_id: int
+    start_inspection_id: int
+    end_inspection_id: Optional[int]
+    start_miles: int
+    end_miles: Optional[int]
+    checked_out_at: datetime
+    returned_at: Optional[datetime]
+
+
+@dataclass
+class TruckReservation:
+    id: int
+    truck_id: int
+    user_id: int
+    note: Optional[str]
+    reserved_at: datetime

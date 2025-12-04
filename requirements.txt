@@ -1,0 +1,2 @@
+# Minimal runtime deps for Render / platform installs
+openpyxl
