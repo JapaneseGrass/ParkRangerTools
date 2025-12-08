@@ -1502,8 +1502,8 @@ class TruckInspectionWebApp:
             photos_section = (
                 """
             <div class=\"form-field\">
-              <label for=\"photos\">Vehicle photos <span class=\"muted\">(Capture or upload 4-10 images)</span></label>
-              <input type=\"file\" id=\"photos\" name=\"photos\" accept=\"image/*\" capture=\"environment\" multiple required />
+              <label for=\"photos\">Vehicle photos <span class=\"muted\">(Upload or take 4-10 images)</span></label>
+              <input type=\"file\" id=\"photos\" name=\"photos\" accept=\"image/*\" multiple required />
             </div>
                 """
             )
