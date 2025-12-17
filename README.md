@@ -74,6 +74,9 @@ Uploaded photos are saved under `frontend/uploads/`, and the shared
 Tip: When you bind to `0.0.0.0`, other devices on the same network (for example,
 a phone or tablet) can reach the app by browsing to `http://<your-mac-ip>:8000/`.
 
+This deployment is a demo environment intended for testing; feel free to create
+accounts and explore without restrictions.
+
 ### Quick deploy for demo (Render)
 
 If you just need a public demo link (data is ephemeral on redeploy), you can point Render at this repo:

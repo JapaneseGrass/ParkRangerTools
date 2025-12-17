@@ -41,11 +41,9 @@ class AuthService:
     ) -> User:
         normalized = email.strip().lower()
         expected_role = ALLOWED_EMAIL_ROLES.get(normalized)
-        if expected_role is None:
-            raise ValueError("Registration is restricted to approved park ranger accounts.")
         if role is None:
-            role = expected_role
-        if role != expected_role:
+            role = expected_role or UserRole.RANGER
+        if expected_role and role != expected_role:
             raise ValueError("Role does not match approved account permissions.")
         if not ranger_number or not ranger_number.strip():
             raise ValueError("Ranger number is required.")
@@ -83,8 +81,6 @@ class AuthService:
 
     def update_password(self, email: str, new_password: str, security_answers: list[str]) -> User:
         normalized = email.strip().lower()
-        if normalized not in ALLOWED_EMAIL_ROLES:
-            raise ValueError("Password updates are restricted to approved park ranger accounts.")
         user = self.database.get_user_by_email(normalized)
         if not user:
             raise LookupError("Account not found.")

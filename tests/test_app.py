@@ -408,19 +408,19 @@ def test_register_user_allowlist(app: TruckInspectionApp) -> None:
 
 
 def test_register_user_disallowed(app: TruckInspectionApp) -> None:
-    with pytest.raises(ValueError):
-        app.auth.register_user(
-            name="Unauthorized",
-            email="unauthorized@example.com",
-            password="password123",
-            role=UserRole.RANGER,
-            ranger_number="RN-9999",
-            security_responses=[
-                ("Q1", "A1"),
-                ("Q2", "A2"),
-                ("Q3", "A3"),
-            ],
-        )
+    user = app.auth.register_user(
+        name="Unauthorized",
+        email="unauthorized@example.com",
+        password="password123",
+        role=UserRole.RANGER,
+        ranger_number="RN-9999",
+        security_responses=[
+            ("Q1", "A1"),
+            ("Q2", "A2"),
+            ("Q3", "A3"),
+        ],
+    )
+    assert user.email == "unauthorized@example.com"
 
 
 def test_update_password(app: TruckInspectionApp) -> None:

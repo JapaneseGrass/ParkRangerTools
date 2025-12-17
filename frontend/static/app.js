@@ -232,9 +232,32 @@
     });
   }
 
+  function initPhotoInputs() {
+    const wrapper = document.querySelector('[data-photo-field]');
+    if (!wrapper) return;
+    const list = wrapper.querySelector('[data-photo-inputs]');
+    const addBtn = wrapper.querySelector('[data-add-photo]');
+    if (!list || !addBtn) return;
+
+    addBtn.addEventListener('click', () => {
+      const inputs = list.querySelectorAll('input[type="file"]');
+      if (inputs.length >= 10) {
+        addBtn.disabled = true;
+        addBtn.textContent = 'Max 10 photos';
+        return;
+      }
+      const prototype = inputs[0];
+      const clone = prototype.cloneNode(true);
+      clone.value = '';
+      clone.removeAttribute('required');
+      list.appendChild(clone);
+    });
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('[data-fuel-gauge]').forEach((el) => initFuelGauge(el));
     document.querySelectorAll('[data-escalate-toggle]').forEach((el) => initEscalate(el));
     initPhotoViewer();
+    initPhotoInputs();
   });
 })();

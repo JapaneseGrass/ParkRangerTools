@@ -108,10 +108,7 @@ TRUCK_CATEGORY_INFO: dict[str, dict[str, str]] = {
 
 def backend_role_for_email(email: str) -> UserRole:
     normalized = email.strip().lower()
-    role = ALLOWED_EMAIL_ROLES.get(normalized)
-    if role is None:
-        raise ValueError("Registration is restricted to approved park ranger accounts.")
-    return role
+    return ALLOWED_EMAIL_ROLES.get(normalized, UserRole.RANGER)
 
 
 @dataclass
@@ -869,6 +866,7 @@ class TruckInspectionWebApp:
               <div class=\"top-bar-icons\">{icons}</div>
               <nav class=\"nav-links\">{nav}</nav>
             </header>
+            <div class=\"demo-banner\">Demo environment: data is for testing only.</div>
             <main class=\"content\">
               <!--FLASH-->
               {content}
@@ -1503,7 +1501,13 @@ class TruckInspectionWebApp:
                 """
             <div class=\"form-field\">
               <label for=\"photos\">Vehicle photos <span class=\"muted\">(Upload or take 4-10 images)</span></label>
-              <input type=\"file\" id=\"photos\" name=\"photos\" accept=\"image/*\" multiple required />
+              <div class=\"photo-inputs\" data-photo-field>
+                <div data-photo-inputs>
+                  <input type=\"file\" id=\"photos\" name=\"photos\" accept=\"image/*\" required />
+                </div>
+                <button type=\"button\" class=\"button secondary\" data-add-photo>Add another photo</button>
+                <p class=\"muted\">Use \"Add another\" to capture multiple photos without overwriting earlier ones.</p>
+              </div>
             </div>
                 """
             )
