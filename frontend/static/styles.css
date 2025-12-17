@@ -935,6 +935,18 @@ input[type="file"] {
     grid-template-columns: 1fr;
   }
 
+  .inspection-table {
+    display: block;
+    overflow-x: auto;
+    width: 100%;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .inspection-table th,
+  .inspection-table td {
+    white-space: nowrap;
+  }
+
   .fuel-gauge {
     width: 100%;
   }
