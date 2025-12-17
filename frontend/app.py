@@ -1500,13 +1500,17 @@ class TruckInspectionWebApp:
             photos_section = (
                 """
             <div class=\"form-field\">
-              <label for=\"photos\">Vehicle photos <span class=\"muted\">(Upload or take 4-10 images)</span></label>
+              <label for=\"photos-library\">Vehicle photos <span class=\"muted\">(Upload or take 4-10 images)</span></label>
+              <div class=\"photo-inputs\">
+                <input type=\"file\" id=\"photos-library\" name=\"photos\" accept=\"image/*\" multiple required />
+                <p class=\"muted\">Select multiple from your library at once, or use the camera capture below.</p>
+              </div>
               <div class=\"photo-inputs\" data-photo-field>
+                <label class=\"muted\">Camera capture (take photos one-by-one)</label>
                 <div data-photo-inputs>
-                  <input type=\"file\" id=\"photos\" name=\"photos\" accept=\"image/*\" required />
+                  <input type=\"file\" name=\"photos\" accept=\"image/*\" capture=\"environment\" />
                 </div>
-                <button type=\"button\" class=\"button secondary\" data-add-photo>Add another photo</button>
-                <p class=\"muted\">Use \"Add another\" to capture multiple photos without overwriting earlier ones.</p>
+                <button type=\"button\" class=\"button secondary\" data-add-photo>Add another capture</button>
               </div>
             </div>
                 """
